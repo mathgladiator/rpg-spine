@@ -11,7 +11,6 @@ class TokenReaderStateMachine {
   private final HashMap<String, String> deduper;
   private final Consumer<Token> output;
   private final String sourceName;
-  private final String templateSuffix;
   private int currentCharNo;
   private int currentLineNo;
   private int currentByte;
@@ -37,7 +36,6 @@ class TokenReaderStateMachine {
     deduper = new HashMap<>();
     currentByte = 0;
     startByte = 0;
-    templateSuffix = null;
   }
 
   public void consume(final int codepoint) throws SpineLangException {
