@@ -1,0 +1,13 @@
+10: long score;
+
+struct Character {
+  100: int xp;
+
+  200: int hp;
+  201: int max_hp;
+
+  205: int mp;
+  206: int max_mp;
+}
+
+1000: Character[] party;
