@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mvn -q compile)",
+      "Bash(mvn -q test)",
+      "Bash(mvn -q package -DskipTests=true)",
+      "Bash(unzip -l spine.jar)",
+      "Bash(java -jar spine.jar --editor /tmp/does-not-exist-xyz)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(java -jar spine.jar --editor pom.xml)",
+      "Bash(mvn -q clean package)",
+      "Bash(java -jar spine.jar --input demo/schema.rpg)",
+      "Bash(timeout 4 java -jar spine.jar --editor demo)",
+      "Bash(echo \"exit=$?  \\(143=alive til timeout, good\\)\")"
+    ]
+  }
+}

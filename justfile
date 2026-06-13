@@ -4,3 +4,7 @@ build:
 
 demo: build
     java -jar spine.jar --input demo/schema.rpg
+
+# launch the JavaFX editor over the demo/ directory
+edit: build
+    java -jar spine.jar --editor demo

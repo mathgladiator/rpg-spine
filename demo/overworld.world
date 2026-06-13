@@ -1,0 +1,10 @@
+world name="Overworld"
+location id=briar name="Briar" type=town x=120 y=90 discovered=true meta="ruler=Mara;population=1200"
+location id=harbor name="Saltmere" type=port x=320 y=140 discovered=true
+location id=cave name="Dark Cave" type=cave x=240 y=260 discovered=false reveal=flag:found_cave
+location id=keep name="Black Keep" type=castle x=460 y=80 discovered=false reveal=flag:keep_seen
+edge id=road1 from=briar to=harbor cost=2 bidir=true bends="220,80"
+edge id=trail1 from=briar to=cave cost=3 bidir=true blocked=flag:bridge_built bends="160,180;210,230"
+edge id=road2 from=harbor to=keep cost=4 bidir=true
+object id=cache1 kind=chest label="Hidden Cache" x=250 y=275 reveal=flag:found_cave meta="gold=250;trapped=true"
+object id=hermit kind=npc label="Hermit" x=200 y=210

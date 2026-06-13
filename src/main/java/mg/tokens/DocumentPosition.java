@@ -83,6 +83,31 @@ public class DocumentPosition {
     return this;
   }
 
+  /** @return the source name this position came from (may be null) */
+  public String getSource() {
+    return source;
+  }
+
+  /** @return zero-based line index where the construct starts */
+  public int getStartLine() {
+    return startLineIndex == Integer.MAX_VALUE ? 0 : startLineIndex;
+  }
+
+  /** @return zero-based character offset on the start line */
+  public int getStartChar() {
+    return startLinePosition == Integer.MAX_VALUE ? 0 : startLinePosition;
+  }
+
+  /** @return zero-based line index where the construct ends */
+  public int getEndLine() {
+    return endLineIndex;
+  }
+
+  /** @return zero-based character offset on the end line */
+  public int getEndChar() {
+    return endLinePosition;
+  }
+
   public void reset() {
     startLineIndex = Integer.MAX_VALUE;
     startLinePosition = Integer.MAX_VALUE;

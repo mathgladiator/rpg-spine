@@ -73,3 +73,47 @@ int gen_spine_xp_set(SPINE* spine, int value) {
 And the generator will define the function prototype of core_rule_xp_table as well, and this will force the linker to throw an error if the user doesn't define the function somewhere. This provides the developer a way to hook into updates within the document. We will support multiple filters as well which are executed in the order defined. This filter capability provides the C developer a handy way of enforcing data validity.
 
 This is a straight forward filter, but it lacks context, so we have a context-filter that is available for structures only and passes the owning structure into the filter. This changes the signature of the method, so sharing between filter and context-filter will create problems
+
+## The visual editor
+
+The toolkit ships a JavaFX editor for authoring game content. Launch it over a
+content directory:
+
+```
+java -jar spine.jar --editor demo
+# or
+just edit
+```
+
+The directory must exist; the editor refuses to start otherwise. `spine.jar` is
+also a self-contained, double-clickable application: launching it with no
+arguments (e.g. double-clicking on Windows, which requires a JRE with the `.jar`
+file association) opens the editor and prompts for a content folder. The jar
+bundles JavaFX natives for Windows, Linux and macOS, so the same artifact runs
+on any of them regardless of which OS built it. The left pane
+is a file tree; selecting a file opens the editor matching its extension:
+
+- **`.rpg`** — a text editor for spine schema, validated live by this project's
+  own parser. Parse errors are reported with line/column, and field-code
+  collisions across the root and every struct (the milestone-1 uniqueness rule)
+  are flagged before the C codegen ever sees them.
+- **`.dungeon`** — a Wizardry/Bard's-Tale-style grid map editor. Each cell has a
+  floor and wall texture and a state (open / closed-rock / hole / ladder), with
+  per-edge walls, doors, locked doors, secret doors, grates and archways. Drop
+  special tiles (spinners, teleporters, chutes, anti-magic zones, fountains,
+  darkness), wire fixed/random encounters to a shared bestiary and encounter
+  tables, and stack multiple levels connected by stairs and holes.
+- **`.world`** — a pan/zoom graph + scene editor. Place location nodes (town,
+  city, dungeon, …) with metadata, connect them with paths that bend through
+  waypoints, and scatter scene objects that are revealed over time. Reveal/blocked
+  conditions are plain variable-binding strings collected in a side panel, ready
+  for the codegen to resolve against the SPINE document.
+
+Both `.dungeon` and `.world` use a flat, diff-friendly `key=value` text format so
+they version well and are trivial for the eventual C codegen to ingest.
+
+See [documents/CODEGEN.md](documents/CODEGEN.md) for how these documents should
+be turned into Playdate-friendly code/data — and why the world splits into a
+static layer (bake or file) and a small mutable overlay that lives in the save
+document, with variable bindings resolved at generation time so the device never
+needs reflection.

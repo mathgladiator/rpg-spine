@@ -14,11 +14,33 @@
             <version>4.13.2</version>
             <scope>test</scope>
         </dependency>
+        <!-- JavaFX powers the visual editor (mg.editor.*). We bundle the native
+             libraries for ALL desktop platforms into the fat jar so the same
+             spine.jar is double-clickable on Windows and runnable on Linux/macOS
+             regardless of which OS built it. JavaFX selects the matching
+             .dll/.so/.dylib at runtime from the current OS. -->
+        <!-- windows x64 -->
+        <dependency><groupId>org.openjfx</groupId><artifactId>javafx-base</artifactId><version>${javafx.version}</version><classifier>win</classifier></dependency>
+        <dependency><groupId>org.openjfx</groupId><artifactId>javafx-graphics</artifactId><version>${javafx.version}</version><classifier>win</classifier></dependency>
+        <dependency><groupId>org.openjfx</groupId><artifactId>javafx-controls</artifactId><version>${javafx.version}</version><classifier>win</classifier></dependency>
+        <!-- linux x64 -->
+        <dependency><groupId>org.openjfx</groupId><artifactId>javafx-base</artifactId><version>${javafx.version}</version><classifier>linux</classifier></dependency>
+        <dependency><groupId>org.openjfx</groupId><artifactId>javafx-graphics</artifactId><version>${javafx.version}</version><classifier>linux</classifier></dependency>
+        <dependency><groupId>org.openjfx</groupId><artifactId>javafx-controls</artifactId><version>${javafx.version}</version><classifier>linux</classifier></dependency>
+        <!-- macOS intel -->
+        <dependency><groupId>org.openjfx</groupId><artifactId>javafx-base</artifactId><version>${javafx.version}</version><classifier>mac</classifier></dependency>
+        <dependency><groupId>org.openjfx</groupId><artifactId>javafx-graphics</artifactId><version>${javafx.version}</version><classifier>mac</classifier></dependency>
+        <dependency><groupId>org.openjfx</groupId><artifactId>javafx-controls</artifactId><version>${javafx.version}</version><classifier>mac</classifier></dependency>
+        <!-- macOS apple silicon -->
+        <dependency><groupId>org.openjfx</groupId><artifactId>javafx-base</artifactId><version>${javafx.version}</version><classifier>mac-aarch64</classifier></dependency>
+        <dependency><groupId>org.openjfx</groupId><artifactId>javafx-graphics</artifactId><version>${javafx.version}</version><classifier>mac-aarch64</classifier></dependency>
+        <dependency><groupId>org.openjfx</groupId><artifactId>javafx-controls</artifactId><version>${javafx.version}</version><classifier>mac-aarch64</classifier></dependency>
     </dependencies>
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <javafx.version>17.0.6</javafx.version>
     </properties>
     <build>
         <plugins>
