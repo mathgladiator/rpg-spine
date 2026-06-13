@@ -88,9 +88,19 @@ just edit
 The directory must exist; the editor refuses to start otherwise. `spine.jar` is
 also a self-contained, double-clickable application: launching it with no
 arguments (e.g. double-clicking on Windows, which requires a JRE with the `.jar`
-file association) opens the editor and prompts for a content folder. The jar
-bundles JavaFX natives for Windows, Linux and macOS, so the same artifact runs
-on any of them regardless of which OS built it. The left pane
+file association) auto-opens your **most recent project**, and only prompts for a
+folder when there is no recent project. The jar bundles JavaFX natives for
+Windows, Linux and macOS, so the same artifact runs on any of them regardless of
+which OS built it.
+
+The **Project** menu manages folders:
+
+- **Open Folder…** — pick a content folder to edit (it becomes the most recent).
+- **Recent Projects** — re-opens a previous folder; the list is ordered
+  most-recent-first and persisted to a per-user config location
+  (`%APPDATA%\rpg-spine` on Windows, `~/Library/Application Support/rpg-spine`
+  on macOS, `$XDG_CONFIG_HOME`/`~/.config/rpg-spine` on Linux).
+- **Close** — quits the application. The left pane
 is a file tree; selecting a file opens the editor matching its extension:
 
 - **`.rpg`** — a text editor for spine schema, validated live by this project's

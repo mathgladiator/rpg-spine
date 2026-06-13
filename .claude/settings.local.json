@@ -11,7 +11,9 @@
       "Bash(mvn -q clean package)",
       "Bash(java -jar spine.jar --input demo/schema.rpg)",
       "Bash(timeout 4 java -jar spine.jar --editor demo)",
-      "Bash(echo \"exit=$?  \\(143=alive til timeout, good\\)\")"
+      "Bash(echo \"exit=$?  \\(143=alive til timeout, good\\)\")",
+      "Bash(echo \"boot1 exit=$? \\(no exception lines = good\\)\")",
+      "Bash(timeout 4 java -jar spine.jar)"
     ]
   }
 }

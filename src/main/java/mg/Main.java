@@ -11,9 +11,10 @@ import java.nio.file.Files;
 public class Main {
   public static void main(String[] args) throws Exception{
     // No arguments means the jar was launched on its own (e.g. double-clicked on
-    // Windows). Open the editor and let the user pick a content folder.
+    // Windows). Open the editor on the most recent project, or prompt for a
+    // folder when there is no recent project.
     if (args.length == 0) {
-      mg.editor.EditorLauncher.openChooser();
+      mg.editor.EditorLauncher.openDefault();
       return;
     }
 

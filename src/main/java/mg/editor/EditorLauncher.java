@@ -23,10 +23,10 @@ public final class EditorLauncher {
 
   /**
    * Launch with no preset directory — used when the jar is double-clicked. The
-   * app pops a directory chooser on startup so the user can point it at their
-   * content folder.
+   * app auto-opens the most recent project, and only prompts for a folder when
+   * there are no recent projects.
    */
-  public static void openChooser() {
+  public static void openDefault() {
     ROOT = null;
     Application.launch(EditorApp.class);
   }
