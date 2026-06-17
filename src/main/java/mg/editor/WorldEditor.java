@@ -31,14 +31,21 @@ import javafx.scene.paint.Color;
 import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
 import javafx.scene.text.TextAlignment;
+import javafx.stage.Window;
 import mg.editor.world.World;
+import mg.editor.world.World.Boundary;
 import mg.editor.world.World.Edge;
 import mg.editor.world.World.Location;
 import mg.editor.world.World.LocationType;
 import mg.editor.world.World.SceneObject;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * A pan/zoom graph + scene editor for .world files: drop location nodes, wire
@@ -48,7 +55,7 @@ import java.util.List;
  * the codegen later resolves against the save document.
  */
 public class WorldEditor implements Editor {
-  private enum Tool { SELECT, ADD_LOCATION, ADD_OBJECT, CONNECT, ADD_BEND, DELETE }
+  private enum Tool { SELECT, ADD_LOCATION, ADD_OBJECT, PLACE_IMAGE, CONNECT, ADD_BEND, DRAW_BOUNDARY, DELETE }
 
   private enum SelKind { NONE, LOCATION, OBJECT, EDGE, BEND }
 
@@ -74,7 +81,18 @@ public class WorldEditor implements Editor {
   private boolean panning;
   private double panLastX, panLastY;
 
-  private Image backgroundImage;
+  // image palette + placement
+  private final ListView<String> paletteList = new ListView<>();
+  private final Map<String, Image> imageCache = new HashMap<>();
+  private ToggleButton selectBtn;   // to revert to SELECT after placing
+
+  // in-progress boundary being drawn (world coords)
+  private final List<double[]> pendingBoundary = new ArrayList<>();
+
+  // multi-select of scene objects + rubber-band rectangle (screen coords)
+  private final Set<SceneObject> multiSel = new LinkedHashSet<>();
+  private boolean rubberbanding;
+  private double rubX0, rubY0, rubX1, rubY1;
 
   private final VBox propsBox = new VBox(6);
   private final ListView<String> varsList = new ListView<>();
@@ -83,7 +101,6 @@ public class WorldEditor implements Editor {
     this.file = file;
     this.status = status;
     this.world = World.load(file);
-    loadBackground();
     buildUi();
     rebuildProps();
     refreshVars();
@@ -105,27 +122,53 @@ public class WorldEditor implements Editor {
 
     ToggleGroup tg = new ToggleGroup();
     box.getChildren().add(section("Tools"));
-    box.getChildren().add(toolButton(tg, Tool.SELECT, "Select / Move"));
+    selectBtn = toolButton(tg, Tool.SELECT, "Select / Move");
+    box.getChildren().add(selectBtn);
     box.getChildren().add(toolButton(tg, Tool.ADD_LOCATION, "Add Location"));
     box.getChildren().add(toolButton(tg, Tool.ADD_OBJECT, "Add Object"));
+    box.getChildren().add(toolButton(tg, Tool.PLACE_IMAGE, "Place Image"));
     box.getChildren().add(toolButton(tg, Tool.CONNECT, "Connect Path"));
     box.getChildren().add(toolButton(tg, Tool.ADD_BEND, "Add Path Bend"));
+    box.getChildren().add(toolButton(tg, Tool.DRAW_BOUNDARY, "Draw Boundary"));
     box.getChildren().add(toolButton(tg, Tool.DELETE, "Delete"));
 
     box.getChildren().add(spacerV(8));
-    box.getChildren().add(section("Map"));
-    Button setMap = new Button("Set Background…");
-    setMap.setMaxWidth(Double.MAX_VALUE);
-    setMap.setOnAction(e -> setBackground());
-    box.getChildren().add(setMap);
+    box.getChildren().add(section("Palette"));
+    paletteList.getItems().setAll(world.palette);
+    paletteList.setPrefHeight(120);
+    box.getChildren().add(paletteList);
+    Button addImg = new Button("Add Image…");
+    addImg.setMaxWidth(Double.MAX_VALUE);
+    addImg.setOnAction(e -> addPaletteImage());
+    Button removeImg = new Button("Remove Image");
+    removeImg.setMaxWidth(Double.MAX_VALUE);
+    removeImg.setOnAction(e -> removePaletteImage());
+    box.getChildren().addAll(addImg, removeImg,
+        hint("Select a palette image, pick Place Image, then click the map."));
 
-    Label help = new Label("• left-drag pans is OFF;\n  use right-drag to pan\n• scroll to zoom\n• Connect: click A then B");
-    help.setWrapText(true);
-    help.setFont(Font.font(11));
+    box.getChildren().add(spacerV(8));
+    box.getChildren().add(section("Boundary"));
+    Button finishB = new Button("Finish Boundary");
+    finishB.setMaxWidth(Double.MAX_VALUE);
+    finishB.setOnAction(e -> finishBoundary());
+    Button cancelB = new Button("Cancel Boundary");
+    cancelB.setMaxWidth(Double.MAX_VALUE);
+    cancelB.setOnAction(e -> { pendingBoundary.clear(); redraw(); });
+    box.getChildren().addAll(finishB, cancelB,
+        hint("Draw Boundary: click to add points, then Finish."));
+
     box.getChildren().add(spacerV(6));
-    box.getChildren().add(help);
+    box.getChildren().add(hint("• right-drag pans · scroll zooms\n• Connect: click A then B\n"
+        + "• Select: drag a box or shift-click to multi-select objects"));
 
     return new ScrollPane(box) {{ setFitToWidth(true); }};
+  }
+
+  private static Label hint(String text) {
+    Label l = new Label(text);
+    l.setWrapText(true);
+    l.setFont(Font.font(11));
+    return l;
   }
 
   private ToggleButton toolButton(ToggleGroup tg, Tool t, String label) {
@@ -150,7 +193,7 @@ public class WorldEditor implements Editor {
     canvas.setHeight(1000);
     canvas.setOnMousePressed(this::onPress);
     canvas.setOnMouseDragged(this::onDrag);
-    canvas.setOnMouseReleased(e -> { draggingPoint = false; panning = false; });
+    canvas.setOnMouseReleased(this::onRelease);
     canvas.setOnScroll(e -> {
       double factor = e.getDeltaY() > 0 ? 1.1 : 1 / 1.1;
       double wx = worldX(e.getX());
@@ -196,8 +239,28 @@ public class WorldEditor implements Editor {
     double wy = worldY(e.getY());
     switch (tool) {
       case SELECT -> {
+        if (e.isShiftDown()) {
+          SceneObject o = hitObject(e.getX(), e.getY());
+          if (o != null) {
+            if (!multiSel.remove(o)) {
+              multiSel.add(o);
+            }
+            clearSel();
+            rebuildProps();
+            redraw();
+          }
+          return;
+        }
         hitTest(e.getX(), e.getY());
-        draggingPoint = selKind == SelKind.LOCATION || selKind == SelKind.OBJECT || selKind == SelKind.BEND;
+        if (selKind == SelKind.NONE) {
+          multiSel.clear();
+          rubberbanding = true;
+          rubX0 = rubX1 = e.getX();
+          rubY0 = rubY1 = e.getY();
+        } else {
+          multiSel.clear();
+          draggingPoint = selKind == SelKind.LOCATION || selKind == SelKind.OBJECT || selKind == SelKind.BEND;
+        }
         rebuildProps();
         redraw();
       }
@@ -221,7 +284,31 @@ public class WorldEditor implements Editor {
         world.objects.add(o);
         select(SelKind.OBJECT, o);
         markDirty();
+        revertToSelect();
         rebuildProps();
+        redraw();
+      }
+      case PLACE_IMAGE -> {
+        String img = paletteList.getSelectionModel().getSelectedItem();
+        if (img == null) {
+          status.setText("select a palette image first");
+        } else {
+          SceneObject o = new SceneObject();
+          o.id = uniqueId("img", world.objects.stream().map(x -> x.id).toList());
+          o.kind = "image";
+          o.image = img;
+          o.x = wx;
+          o.y = wy;
+          world.objects.add(o);
+          select(SelKind.OBJECT, o);
+          markDirty();
+          revertToSelect();
+          rebuildProps();
+          redraw();
+        }
+      }
+      case DRAW_BOUNDARY -> {
+        pendingBoundary.add(new double[]{wx, wy});
         redraw();
       }
       case CONNECT -> {
@@ -277,6 +364,12 @@ public class WorldEditor implements Editor {
       redraw();
       return;
     }
+    if (rubberbanding) {
+      rubX1 = e.getX();
+      rubY1 = e.getY();
+      redraw();
+      return;
+    }
     if (tool == Tool.SELECT && draggingPoint) {
       double wx = worldX(e.getX());
       double wy = worldY(e.getY());
@@ -294,6 +387,77 @@ public class WorldEditor implements Editor {
       markDirty();
       redraw();
     }
+  }
+
+  private void onRelease(MouseEvent e) {
+    if (rubberbanding) {
+      rubberbanding = false;
+      double x0 = Math.min(rubX0, rubX1);
+      double y0 = Math.min(rubY0, rubY1);
+      double x1 = Math.max(rubX0, rubX1);
+      double y1 = Math.max(rubY0, rubY1);
+      multiSel.clear();
+      // a click (no real drag) selects nothing; a box selects enclosed objects
+      if (x1 - x0 > 3 || y1 - y0 > 3) {
+        for (SceneObject o : world.objects) {
+          double sx = screenX(o.x);
+          double sy = screenY(o.y);
+          if (sx >= x0 && sx <= x1 && sy >= y0 && sy <= y1) {
+            multiSel.add(o);
+          }
+        }
+      }
+      rebuildProps();
+      redraw();
+    }
+    draggingPoint = false;
+    panning = false;
+  }
+
+  /** after placing an item, return to the Select tool (so the next click selects). */
+  private void revertToSelect() {
+    tool = Tool.SELECT;
+    connectFrom = null;
+    if (selectBtn != null) {
+      selectBtn.setSelected(true);
+    }
+  }
+
+  // -------------------------------------------------------------------- palette
+
+  private void addPaletteImage() {
+    ImagePicker.pick(window(), file.getParentFile(), "Add palette image").ifPresent(f -> {
+      String rel = relativize(f);
+      if (!world.palette.contains(rel)) {
+        world.palette.add(rel);
+        paletteList.getItems().setAll(world.palette);
+        paletteList.getSelectionModel().select(rel);
+        markDirty();
+      }
+    });
+  }
+
+  private void removePaletteImage() {
+    String sel = paletteList.getSelectionModel().getSelectedItem();
+    if (sel != null) {
+      world.palette.remove(sel);
+      paletteList.getItems().setAll(world.palette);
+      markDirty();
+    }
+  }
+
+  // ------------------------------------------------------------------ boundary
+
+  private void finishBoundary() {
+    if (pendingBoundary.size() >= 2) {
+      Boundary b = new Boundary();
+      b.id = uniqueId("bound", world.boundaries.stream().map(x -> x.id).toList());
+      b.points.addAll(pendingBoundary);
+      world.boundaries.add(b);
+      markDirty();
+    }
+    pendingBoundary.clear();
+    redraw();
   }
 
   // ----------------------------------------------------------------- hit tests
@@ -382,7 +546,23 @@ public class WorldEditor implements Editor {
       return;
     }
     Edge e = hitEdge(sx, sy);
-    if (e != null) { world.edges.remove(e); clearSel(); }
+    if (e != null) { world.edges.remove(e); clearSel(); return; }
+    Boundary b = hitBoundary(sx, sy);
+    if (b != null) { world.boundaries.remove(b); clearSel(); }
+  }
+
+  private Boundary hitBoundary(double sx, double sy) {
+    for (Boundary b : world.boundaries) {
+      for (int i = 0; i + 1 < b.points.size(); i++) {
+        double d = pointSeg(sx, sy,
+            screenX(b.points.get(i)[0]), screenY(b.points.get(i)[1]),
+            screenX(b.points.get(i + 1)[0]), screenY(b.points.get(i + 1)[1]));
+        if (d <= 7) {
+          return b;
+        }
+      }
+    }
+    return null;
   }
 
   /** the ordered world-space points of an edge: from-location, bends, to-location. */
@@ -426,36 +606,68 @@ public class WorldEditor implements Editor {
     GraphicsContext g = canvas.getGraphicsContext2D();
     g.setFill(Color.web("#1f2329"));
     g.fillRect(0, 0, canvas.getWidth(), canvas.getHeight());
-
-    if (backgroundImage != null) {
-      g.drawImage(backgroundImage, offsetX, offsetY,
-          backgroundImage.getWidth() * scale, backgroundImage.getHeight() * scale);
-    }
     drawGrid(g);
 
-    // edges
+    for (Boundary b : world.boundaries) {
+      drawBoundary(g, b.points, Color.web("#ff8a65"), false);
+    }
     for (Edge e : world.edges) {
       drawEdge(g, e);
     }
-    // objects
     for (SceneObject o : world.objects) {
       drawObject(g, o);
     }
-    // locations
     for (Location l : world.locations) {
       drawLocation(g, l);
     }
-    // connect pending highlight
     if (connectFrom != null) {
       g.setStroke(Color.LIME);
       g.setLineWidth(2);
       g.strokeOval(screenX(connectFrom.x) - 16, screenY(connectFrom.y) - 16, 32, 32);
     }
+    // multi-selected objects
+    g.setStroke(Color.DODGERBLUE);
+    g.setLineWidth(2);
+    for (SceneObject o : multiSel) {
+      ring(g, screenX(o.x), screenY(o.y), 12);
+    }
+    // boundary being drawn
+    if (!pendingBoundary.isEmpty()) {
+      drawBoundary(g, pendingBoundary, Color.web("#ffd54f"), true);
+    }
     drawSelection(g);
+    // rubber-band rectangle
+    if (rubberbanding) {
+      double x = Math.min(rubX0, rubX1);
+      double y = Math.min(rubY0, rubY1);
+      g.setStroke(Color.DODGERBLUE);
+      g.setLineWidth(1);
+      g.setLineDashes(4, 4);
+      g.strokeRect(x, y, Math.abs(rubX1 - rubX0), Math.abs(rubY1 - rubY0));
+      g.setLineDashes();
+    }
 
     status.setText(world.name + " — " + world.locations.size() + " locations, "
-        + world.edges.size() + " paths, " + world.objects.size() + " objects"
+        + world.edges.size() + " paths, " + world.objects.size() + " objects, "
+        + world.boundaries.size() + " boundaries"
+        + (multiSel.isEmpty() ? "" : " · " + multiSel.size() + " selected")
         + (dirty ? " *" : ""));
+  }
+
+  private void drawBoundary(GraphicsContext g, List<double[]> pts, Color color, boolean showPoints) {
+    g.setStroke(color);
+    g.setLineWidth(2);
+    g.setLineDashes();
+    for (int i = 0; i + 1 < pts.size(); i++) {
+      g.strokeLine(screenX(pts.get(i)[0]), screenY(pts.get(i)[1]),
+          screenX(pts.get(i + 1)[0]), screenY(pts.get(i + 1)[1]));
+    }
+    if (showPoints) {
+      g.setFill(color);
+      for (double[] p : pts) {
+        g.fillOval(screenX(p[0]) - 3, screenY(p[1]) - 3, 6, 6);
+      }
+    }
   }
 
   private void drawGrid(GraphicsContext g) {
@@ -541,6 +753,22 @@ public class WorldEditor implements Editor {
   private void drawObject(GraphicsContext g, SceneObject o) {
     double x = screenX(o.x);
     double y = screenY(o.y);
+    if (!o.image.isEmpty()) {
+      Image img = image(o.image);
+      if (img != null) {
+        double w = img.getWidth() * scale;
+        double h = img.getHeight() * scale;
+        g.drawImage(img, x - w / 2, y - h / 2, w, h);
+        if (!o.reveal.isEmpty()) {
+          g.setStroke(Color.web("#dddddd"));
+          g.setLineWidth(1);
+          g.setLineDashes(3, 3);
+          g.strokeRect(x - w / 2, y - h / 2, w, h);
+          g.setLineDashes();
+        }
+        return;
+      }
+    }
     double s = 7;
     g.setFill(kindColor(o.kind));
     g.fillRect(x - s, y - s, s * 2, s * 2);
@@ -587,6 +815,10 @@ public class WorldEditor implements Editor {
   private void rebuildProps() {
     propsBox.getChildren().clear();
     propsBox.setPadding(new Insets(8));
+    if (!multiSel.isEmpty()) {
+      buildMultiProps();
+      return;
+    }
     switch (selKind) {
       case LOCATION -> buildLocationProps();
       case OBJECT -> buildObjectProps();
@@ -631,11 +863,60 @@ public class WorldEditor implements Editor {
     TextField meta = field(World.metaToTextPublic(o.meta), v -> { World.metaFromTextPublic(o.meta, v); markDirty(); });
     meta.setPromptText("gold=250;trapped=true");
 
+    TextField image = field(o.image, v -> { o.image = v; markDirty(); redraw(); });
+    image.setPromptText("(palette image path, optional)");
+
     propsBox.getChildren().addAll(
         section("Scene Object"),
         labeled("id", id), labeled("kind", kind), labeled("label", label),
+        labeled("image", image),
         labeled("reveal binding", reveal), labeled("metadata", meta),
         coordLabel(o.x, o.y));
+  }
+
+  private void buildMultiProps() {
+    TextField kind = new TextField();
+    kind.setPromptText("kind");
+    kind.setMaxWidth(Double.MAX_VALUE);
+    TextField label = new TextField();
+    label.setPromptText("label");
+    label.setMaxWidth(Double.MAX_VALUE);
+    TextField reveal = new TextField();
+    reveal.setPromptText("reveal binding");
+    reveal.setMaxWidth(Double.MAX_VALUE);
+
+    Button apply = new Button("Apply to " + multiSel.size() + " objects");
+    apply.setMaxWidth(Double.MAX_VALUE);
+    apply.setOnAction(e -> {
+      for (SceneObject o : multiSel) {
+        if (!kind.getText().isBlank()) o.kind = kind.getText().strip();
+        if (!label.getText().isBlank()) o.label = label.getText().strip();
+        if (!reveal.getText().isBlank()) o.reveal = reveal.getText().strip();
+      }
+      markDirty();
+      refreshVars();
+      redraw();
+    });
+    Button del = new Button("Delete selected");
+    del.setMaxWidth(Double.MAX_VALUE);
+    del.setOnAction(e -> {
+      world.objects.removeAll(multiSel);
+      multiSel.clear();
+      clearSel();
+      markDirty();
+      rebuildProps();
+      refreshVars();
+      redraw();
+    });
+    Button clear = new Button("Clear selection");
+    clear.setMaxWidth(Double.MAX_VALUE);
+    clear.setOnAction(e -> { multiSel.clear(); rebuildProps(); redraw(); });
+
+    propsBox.getChildren().addAll(
+        section(multiSel.size() + " objects selected"),
+        new Label("Set common properties\n(blank = leave unchanged):"),
+        labeled("kind", kind), labeled("label", label), labeled("reveal binding", reveal),
+        apply, del, clear);
   }
 
   private void buildEdgeProps() {
@@ -693,35 +974,48 @@ public class WorldEditor implements Editor {
     selLoc = null; selObj = null; selEdge = null; selBend = -1;
   }
 
-  // --------------------------------------------------------------- background
+  // ---------------------------------------------------------------- image cache
 
-  private void loadBackground() {
-    if (world.mapImage == null || world.mapImage.isEmpty()) {
-      return;
+  private Image image(String rel) {
+    if (rel == null || rel.isBlank()) {
+      return null;
+    }
+    Image cached = imageCache.get(rel);
+    if (cached != null) {
+      return cached;
+    }
+    File f = resolve(rel);
+    if (!f.isFile()) {
+      return null;
     }
     try {
-      File img = new File(world.mapImage);
-      if (!img.isAbsolute()) {
-        img = new File(file.getParentFile(), world.mapImage);
-      }
-      if (img.exists()) {
-        backgroundImage = new Image(img.toURI().toString());
-      }
-    } catch (Exception ignore) {
-      backgroundImage = null;
+      Image img = new Image(f.toURI().toString());
+      imageCache.put(rel, img);
+      return img;
+    } catch (Exception e) {
+      return null;
     }
   }
 
-  private void setBackground() {
-    TextInputDialog d = new TextInputDialog(world.mapImage);
-    d.setHeaderText("Background image path (relative to the .world file)");
-    d.setContentText("path:");
-    d.showAndWait().ifPresent(v -> {
-      world.mapImage = v.strip();
-      loadBackground();
-      markDirty();
-      redraw();
-    });
+  private File resolve(String rel) {
+    File f = new File(rel);
+    return f.isAbsolute() ? f : new File(file.getParentFile(), rel);
+  }
+
+  private String relativize(File picked) {
+    File base = file.getParentFile();
+    if (base != null) {
+      try {
+        return base.toPath().relativize(picked.toPath()).toString().replace('\\', '/');
+      } catch (Exception ignore) {
+        // different roots
+      }
+    }
+    return picked.getAbsolutePath();
+  }
+
+  private Window window() {
+    return root.getScene() != null ? root.getScene().getWindow() : null;
   }
 
   // -------------------------------------------------------------- coord transforms

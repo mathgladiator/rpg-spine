@@ -13,7 +13,15 @@
       "Bash(timeout 4 java -jar spine.jar --editor demo)",
       "Bash(echo \"exit=$?  \\(143=alive til timeout, good\\)\")",
       "Bash(echo \"boot1 exit=$? \\(no exception lines = good\\)\")",
-      "Bash(timeout 4 java -jar spine.jar)"
+      "Bash(timeout 4 java -jar spine.jar)",
+      "Bash(rustc --version)",
+      "Bash(rustup target *)",
+      "Bash(rustc --print target-list)",
+      "WebSearch",
+      "WebFetch(domain:docs.meshy.ai)",
+      "Bash(mvn -q test -Dtest=MonoTests)",
+      "Bash(mvn -q package -DskipTests)",
+      "WebFetch(domain:api.pixellab.ai)"
     ]
   }
 }

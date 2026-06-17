@@ -51,18 +51,27 @@ public class World {
   /** an object placed on the map, revealed over time. */
   public static class SceneObject {
     public String id = "obj";
-    public String kind = "marker";      // chest, npc, monster, marker, portal, ...
+    public String kind = "marker";      // chest, npc, monster, marker, portal, image, ...
     public String label = "";
+    public String image = "";           // palette image painted onto the map (relative path)
     public double x, y;
     public String reveal = "";          // binding; empty = always visible
     public final Map<String, String> meta = new LinkedHashMap<>();
   }
 
+  /** a drawn boundary: an ordered polyline of world-space points. */
+  public static class Boundary {
+    public String id = "bound";
+    public final List<double[]> points = new ArrayList<>(); // {x,y} in order
+  }
+
   public String name = "World";
-  public String mapImage = "";          // optional background image, relative to file
+  /** image palette: paths (relative to the file) the artist paints onto the map. */
+  public final List<String> palette = new ArrayList<>();
   public final List<Location> locations = new ArrayList<>();
   public final List<Edge> edges = new ArrayList<>();
   public final List<SceneObject> objects = new ArrayList<>();
+  public final List<Boundary> boundaries = new ArrayList<>();
 
   public Location locationById(String id) {
     for (Location l : locations) {
@@ -92,6 +101,18 @@ public class World {
     World w = new World();
     w.name = name;
     return w;
+  }
+
+  /** every image path this world references (palette + placed object images). */
+  public List<String> imageRefs() {
+    List<String> out = new ArrayList<>(palette);
+    for (SceneObject o : objects) {
+      if (o.image != null && !o.image.isBlank()) {
+        out.add(o.image);
+      }
+    }
+    out.removeIf(s -> s == null || s.isBlank());
+    return out;
   }
 
   // ---------------------------------------------------------------- meta utils
@@ -148,9 +169,10 @@ public class World {
 
   public String serialize() {
     StringBuilder sb = new StringBuilder();
-    sb.append("world name=").append(KV.q(name));
-    if (!mapImage.isEmpty()) sb.append(" map=").append(KV.q(mapImage));
-    sb.append('\n');
+    sb.append("world name=").append(KV.q(name)).append('\n');
+    for (String p : palette) {
+      sb.append("palette path=").append(KV.q(p)).append('\n');
+    }
     for (Location l : locations) {
       sb.append("location id=").append(KV.q(l.id))
           .append(" name=").append(KV.q(l.name))
@@ -178,9 +200,15 @@ public class World {
           .append(" label=").append(KV.q(o.label))
           .append(" x=").append(round(o.x))
           .append(" y=").append(round(o.y));
+      if (!o.image.isEmpty()) sb.append(" image=").append(KV.q(o.image));
       if (!o.reveal.isEmpty()) sb.append(" reveal=").append(KV.q(o.reveal));
       if (!o.meta.isEmpty()) sb.append(" meta=").append(KV.q(metaToText(o.meta)));
       sb.append('\n');
+    }
+    for (Boundary b : boundaries) {
+      sb.append("boundary id=").append(KV.q(b.id))
+          .append(" points=").append(KV.q(bendsToText(b.points)))
+          .append('\n');
     }
     return sb.toString();
   }
@@ -200,7 +228,12 @@ public class World {
       switch (kv.verb) {
         case "world" -> {
           w.name = kv.get("name", "World");
-          w.mapImage = kv.get("map", "");
+        }
+        case "palette" -> {
+          String p = kv.get("path", "");
+          if (!p.isBlank()) {
+            w.palette.add(p);
+          }
         }
         case "location" -> {
           Location l = new Location();
@@ -240,11 +273,29 @@ public class World {
           o.id = kv.get("id", "obj");
           o.kind = kv.get("kind", "marker");
           o.label = kv.get("label", "");
+          o.image = kv.get("image", "");
           o.x = kv.getInt("x", 0);
           o.y = kv.getInt("y", 0);
           o.reveal = kv.get("reveal", "");
           metaFromText(o.meta, kv.get("meta", ""));
           w.objects.add(o);
+        }
+        case "boundary" -> {
+          Boundary b = new Boundary();
+          b.id = kv.get("id", "bound");
+          for (String p : kv.get("points", "").split(";")) {
+            String t = p.strip();
+            if (t.isEmpty()) {
+              continue;
+            }
+            String[] xy = t.split(",");
+            if (xy.length == 2) {
+              try {
+                b.points.add(new double[]{Double.parseDouble(xy[0].strip()), Double.parseDouble(xy[1].strip())});
+              } catch (Exception ignore) { }
+            }
+          }
+          w.boundaries.add(b);
         }
         default -> { /* forward-compat: ignore */ }
       }

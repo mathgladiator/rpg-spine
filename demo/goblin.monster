@@ -1,0 +1,20 @@
+monster id=goblin name=Goblin family=humanoid
+ref path=ref/goblin.ref.png
+ref path=ref/goblin-2.ref.png
+battle stance="" damage=""
+anim role=battle.attack fps=6 loop=0 frames=""
+anim role=dungeon.idle.towards fps=6 loop=0 frames=""
+anim role=dungeon.idle.away fps=6 loop=0 frames=""
+anim role=dungeon.idle.left fps=6 loop=0 frames=""
+anim role=dungeon.idle.right fps=6 loop=0 frames=""
+anim role=dungeon.walk.towards fps=6 loop=0 frames=""
+anim role=dungeon.walk.away fps=6 loop=0 frames=""
+anim role=dungeon.walk.left fps=6 loop=0 frames=""
+anim role=dungeon.walk.right fps=6 loop=0 frames=""
+extract w=128 h=128 algo=ATKINSON threshold=128 alpha=WHITE background=none
+stats cols=HP,MP,ATK,DEF,SPD,XP,GOLD
+level n=1 HP=14 MP=0 ATK=5 DEF=3 SPD=4 XP=8 GOLD=5
+level n=2 HP=20 MP=0 ATK=7 DEF=4 SPD=4 XP=14 GOLD=8
+level n=3 HP=27 MP=2 ATK=9 DEF=5 SPD=5 XP=22 GOLD=12
+skill name="Rusty Slash" learn=1 mp=0 power=6 type=physical
+skill name="War Cry" learn=2 mp=3 power=0 type=buff

@@ -1,5 +1,44 @@
 rpg-spine is a toolkit for building a single player RPG. The baseline functionality is to be able to define the save state of the game in a precise way, and the primary code generation is for C since the RPG being built will run on play.date which is an extremely limited device. As such, the goal of rpg-spine is to build the data model as the spine of the game as a giant global document.
 
+## Status
+
+What exists today:
+
+- A **lossless tokenizer** and a **recursive-descent parser** for `.rpg` schema
+  files (`mg.tokens` + `mg.tree`): root-level fields and `struct` blocks.
+- The **JavaFX visual editor** suite described below (`mg.editor`).
+
+What is still **design, not code** — the milestones and codegen notes below are
+the roadmap, not current behavior:
+
+- C code generation, the binary save / mutation-command file format, and the
+  symbol table are **not implemented yet**. Running the CLI without an editor
+  flag just parses the input and prints a debug dump of structs and fields.
+- The `private` keyword and field bodies (`{ filter = ... }`) parse but have no
+  generator behavior; a field body currently raises `NOT YET IMPLEMENTED`.
+
+The schema syntax the parser accepts today is
+`<code>: [private|public] <type>[] <name>;` (the `[]` is postfix on the type,
+e.g. `1000: Character[] party;`) plus `struct <Name> { ... }`. Field-code
+uniqueness is validated live in the `.rpg` editor rather than in the core parser.
+
+## Building and running
+
+Java 17 and Maven; a [`justfile`](justfile) wraps the common commands:
+
+```
+just build      # mvn package, then move the fat jar to ./spine.jar
+just demo       # build, then parse demo/schema.rpg and print a debug dump
+just edit       # build, then launch the editor over demo/
+mvn test        # run the JUnit test suite
+```
+
+`spine.jar` is a self-contained fat jar (main class `mg.Main`) that bundles
+JavaFX natives for every desktop platform, so the same artifact runs on Windows,
+Linux and macOS. CLI flags: `--input`/`-i` (parse a schema), `--editor`/`-e`
+(launch the editor over a directory), and the not-yet-wired `--output`/`-o` and
+`--symbols`/`-s`.
+
 ## Milestone 1: Defining the schema for serializing game state
 
 At core, we want to be able to have a flexible file format that can grow during development but also have a compact representation that is easy for C to ingest, validate, and apply. We avoid JSON because field names may change for prettiness, and we have to consider long term upgrades capability as the game will have patches for both bugs and content updates. In defining a schema, we start with root level document globals like this:
@@ -100,8 +139,78 @@ The **Project** menu manages folders:
   most-recent-first and persisted to a per-user config location
   (`%APPDATA%\rpg-spine` on Windows, `~/Library/Application Support/rpg-spine`
   on macOS, `$XDG_CONFIG_HOME`/`~/.config/rpg-spine` on Linux).
-- **Close** — quits the application. The left pane
-is a file tree; selecting a file opens the editor matching its extension:
+- **Close** — quits the application.
+
+The **Settings** menu holds **Grok API Key…** (⌘/Ctrl-,), where you enter the
+xAI **Grok** API key (AI assistance, plus model) and the **PixelLab** API key
+(pixel-art image generation). Keys are masked by default with a **Show** toggle
+and persisted to `settings.properties` in the same per-user config directory as
+the recent-projects list — owner-only readable where the OS supports POSIX
+permissions. Get keys at https://console.x.ai and https://www.pixellab.ai/account.
+
+### Asset pipeline
+
+All images are **1-bit black-and-white PNGs** for the Playdate display, enforced
+by `mg.assets.Mono`, which also implements the documented half/quarter resize
+algorithm. `mg.assets.PixelLab` integrates the PixelLab.ai pixel-art API
+(pixflux text→image, bitforge style, rotate, and text/skeleton animation). See
+[documents/ASSET_PIPELINE.md](documents/ASSET_PIPELINE.md) for the
+black-and-white rule, the monster/item generation workflows, the item
+usage-animation spec, and the exact resize algorithm.
+[documents/AI.GEN.md](documents/AI.GEN.md) surveys the image-generation backends
+and why PixelLab was chosen.
+
+The **Audit** menu's **Project Assets…** report lists **lost** images
+(referenced but missing — open the owning file) and **orphan** images (on disk
+but unreferenced — delete them all). Files with errors (a lost reference or a
+parse failure) — and folders containing them — are shown **red** in the tree, and
+missing image references appear red with a `*` in the editors.
+
+In the editor:
+
+- **`.png`** files open a **black-and-white image editor**: pencil / eraser /
+  flood-fill, import-and-convert (threshold or Bayer dither), ½ / ¼ reduce, and
+  an **animation stepper** that treats the image as a horizontal strip of cells
+  so you can step or play frames to check alignment.
+- The **monster editor** builds art from explicit files (no per-frame
+  generation or editing — you select images and build sequences):
+  - **References** — full-colour `.ref.png` images (stored in a `ref/` subfolder)
+    that you **generate** from a prompt with PixelLab, or derive by **styling**,
+    **rotating**, or **animating** an existing reference. From a reference you
+    **extract a region**, resample it to a target resolution, and convert it to
+    black-and-white — choosing among many algorithms (threshold, ordered Bayer,
+    clustered halftone, Floyd–Steinberg and other error-diffusion kernels, or a
+    marching-squares contour) with a live preview — letting you work in high
+    fidelity and then sample down. Extracted 1-bit frames become files
+    you select into animations.
+  - **Battle** — a stance image, a damaged-stance image, and an attack animation.
+  - **Dungeon** — idle and walk, each in four viewer orientations (towards /
+    away / left / right), every one an animation.
+- The **item editor** has three icon-size slots (you select an image for each
+  project icon size) and a **usage animation** with frame speed and loop count.
+- Every **animation** is an explicit, reorderable list of frame files with a
+  frame speed (and loop where relevant) and a play/visualize preview.
+- Image selections use a **project-scoped picker** rooted at the file's folder,
+  so paths stay relative and inside the project.
+
+Reference generation needs a PixelLab API key (Settings); references download as
+full-colour PNG, and the region-extract step converts to 1-bit.
+
+The B&W image editor also offers **Trim white/black** (crop a uniform margin),
+**Canvas…** (resize the canvas without scaling), **Resize…** / **→ icon** /
+**→ cell** (scale, the latter two to the `.project` sizes), and **Crop region…**
+(a drag-to-select popup). All transforms are pure-Java and in-process (no
+external tools), so the editor behaves identically on every platform.
+
+**Project tree** entries can be **renamed**, **cloned**, and **deleted** via
+right-click. A
+**Project Settings…** dialog edits the `.project` file (item icon size, animation
+cell size). **View ▸ Log** opens a window with the last 1000 actions and
+exceptions, and any file that fails to load shows a "failed to load" panel with
+the error in place.
+
+The left pane is a file tree; selecting a file opens the editor matching its
+extension:
 
 - **`.rpg`** — a text editor for spine schema, validated live by this project's
   own parser. Parse errors are reported with line/column, and field-code
@@ -115,12 +224,39 @@ is a file tree; selecting a file opens the editor matching its extension:
   tables, and stack multiple levels connected by stairs and holes.
 - **`.world`** — a pan/zoom graph + scene editor. Place location nodes (town,
   city, dungeon, …) with metadata, connect them with paths that bend through
-  waypoints, and scatter scene objects that are revealed over time. Reveal/blocked
-  conditions are plain variable-binding strings collected in a side panel, ready
-  for the codegen to resolve against the SPINE document.
+  waypoints, and scatter scene objects that are revealed over time. Build an
+  **image palette** (Add Image…) and paint those images onto the map with the
+  **Place Image** tool (placing reverts to Select). **Draw Boundary** lays down
+  boundary polylines for the map. In Select, **drag a box or shift-click** to
+  multi-select objects and set common properties (kind / label / reveal) on all
+  at once. Reveal/blocked conditions are plain variable-binding strings collected
+  in a side panel, ready for the codegen to resolve against the SPINE document.
+- **`.monster`** — a monster definition with two art sets (the 2D JRPG battle
+  view and the first-person 3D dungeon view), each with idle / walk / fighting
+  stance / attack animations (see [documents/ASSETS.md](documents/ASSETS.md)).
+  Its design lives in two editable tables: a per-level stat table with
+  configurable columns (HP, MP, ATK, …; add/remove both rows and columns) and a
+  skills table.
+- **`.item`** — an item with a name, icon, gold value and description, plus
+  **type-specific properties**: a weapon exposes attack/speed/range, armor an
+  armor value and slot, a consumable heal/restore, and so on. Changing the type
+  swaps the property fields to match.
 
-Both `.dungeon` and `.world` use a flat, diff-friendly `key=value` text format so
-they version well and are trivial for the eventual C codegen to ingest.
+The `.dungeon`, `.world`, `.monster` and `.item` editors all use a flat,
+diff-friendly `key=value` text format so they version well and are trivial for
+the eventual C codegen to ingest.
+
+The toolbar's **New File** / **New Folder** create content relative to the folder
+(or file's folder) currently selected in the tree, or the project root if nothing
+is selected. Newly created folders appear in the tree immediately, including empty
+ones.
+
+**Reorganize by dragging:** drag any file or folder in the tree onto a folder (or
+onto a file, meaning that file's folder) to move it there on disk; drop on the
+empty space below the tree to move it to the project root. Moves that would
+collide with an existing name, or drop a folder into its own descendant, are
+refused. If you move the file you're currently editing, the editor reopens it
+from its new location.
 
 See [documents/CODEGEN.md](documents/CODEGEN.md) for how these documents should
 be turned into Playdate-friendly code/data — and why the world splits into a
