@@ -12,11 +12,17 @@ import java.io.ByteArrayOutputStream;
  *       bits are the next 7 pixels, each {@code 1 = black} / {@code 0 = white}
  *       (most-significant first). Highly detailed black-and-white art packs at
  *       7 pixels per byte. Detail chunks cannot carry transparency.
- *   <li><b>Run chunk</b> ({@code 0ccnnnnn}) — the top bit is 0, the next two
- *       bits {@code cc} are the colour ({@link Mono#WHITE 0}/{@link Mono#BLACK 1}
- *       /{@link Mono#TRANSPARENT 2}), and the low five bits {@code nnnnn} are a
- *       run count of 1&ndash;31 of that colour. Flat fills and transparent
- *       background collapse to roughly one byte per 31 pixels.
+ *   <li><b>Short run</b> ({@code 0ccnnnnn}, {@code cc} &ne; {@code 11}) — the top
+ *       bit is 0, the next two bits {@code cc} are the colour ({@link Mono#WHITE
+ *       0}/{@link Mono#BLACK 1}/{@link Mono#TRANSPARENT 2}), and the low five bits
+ *       {@code nnnnn} hold the run count minus one, so they cover 1&ndash;32 of
+ *       that colour (the otherwise-dead "run of 0" code is reclaimed).
+ *   <li><b>Long run</b> ({@code 011ccHHH} + {@code LLLLLLLL}) — when the colour
+ *       field is the otherwise-unused {@code 11}, this is a two-byte run: the real
+ *       colour {@code cc} sits in bits 4&ndash;3 and an 11-bit (count minus one)
+ *       value ({@code HHH} high, {@code LLLLLLLL} low) covers 1&ndash;2048, so a
+ *       flat fill or a transparent background collapses to two bytes instead of
+ *       one byte per 32 pixels. This is the big win for background-heavy sprites.
  * </ul>
  *
  * <p>Pixels are the tri-state {@link Mono} values (0/1/2), scanned row-major
@@ -75,10 +81,20 @@ public final class BwCodec {
       while (i + run < n && px[i + run] == c) {
         run++;
       }
-      int rleTake = Math.min(run, 31);
+      int rleTake = Math.min(run, 32); // 5-bit count stored as take-1, so 1..32
       int best = 1 + dp[i + rleTake];
       int bestTake = rleTake;
       boolean bestDetail = false;
+      // a long run (2 bytes) pays for itself once it beats two short runs
+      int longTake = Math.min(run, 2048); // 11-bit count stored as take-1, so 1..2048
+      if (longTake > 32) {
+        int cost = 2 + dp[i + longTake];
+        if (cost < best) {
+          best = cost;
+          bestTake = longTake;
+          bestDetail = false;
+        }
+      }
       // a detail chunk is exactly 7 non-transparent pixels
       if (i + 7 <= n) {
         boolean ok = true;
@@ -117,7 +133,14 @@ public final class BwCodec {
       } else {
         int c = px[i];
         int t = take[i];
-        out.write((c << 5) | t); // top bit 0, colour in bits 6-5, count in bits 4-0
+        if (t > 32) {
+          // long run: 011 marker, colour in bits 4-3, then take-1 as an 11-bit count
+          int v = t - 1;
+          out.write(0x60 | (c << 3) | ((v >> 8) & 0x7));
+          out.write(v & 0xFF);
+        } else {
+          out.write((c << 5) | (t - 1)); // top bit 0, colour in bits 6-5, count-1 in bits 4-0
+        }
         i += t;
       }
     }
@@ -134,7 +157,11 @@ public final class BwCodec {
       while (i + run < n && px[i + run] == c) {
         run++;
       }
-      int best = 1 + dp[i + Math.min(run, 31)];
+      int best = 1 + dp[i + Math.min(run, 32)];
+      int longTake = Math.min(run, 2048);
+      if (longTake > 32) {
+        best = Math.min(best, 2 + dp[i + longTake]);
+      }
       if (i + 7 <= n) {
         boolean ok = true;
         for (int k = 0; k < 7; k++) {
@@ -156,27 +183,37 @@ public final class BwCodec {
   public static int[] decode(byte[] data, int bits) {
     int[] px = new int[bits];
     int p = 0;
-    for (byte value : data) {
-      int b = value & 0xFF;
+    int idx = 0;
+    while (idx < data.length) {
+      int b = data[idx++] & 0xFF;
+      int c;
+      int t;
       if ((b & 0x80) != 0) {
+        // detail chunk: 7 black/white pixels, MSB first
         for (int k = 0; k < 7; k++) {
           if (p >= bits) {
             throw new IllegalArgumentException("detail chunk overruns " + bits + " pixels");
           }
           px[p++] = ((b >> (6 - k)) & 1) == 1 ? Mono.BLACK : Mono.WHITE;
         }
+        continue;
+      } else if ((b & 0x60) == 0x60) {
+        // long run: colour in bits 4-3, 11-bit count (stored as count-1) across two bytes
+        if (idx >= data.length) {
+          throw new IllegalArgumentException("truncated long run");
+        }
+        c = (b >> 3) & 0x3;
+        t = (((b & 0x7) << 8) | (data[idx++] & 0xFF)) + 1;
       } else {
-        int c = (b >> 5) & 0x3;
-        if (c == 3) {
-          throw new IllegalArgumentException("reserved run colour 3");
+        // short run: colour in bits 6-5, 5-bit count (stored as count-1)
+        c = (b >> 5) & 0x3;
+        t = (b & 0x1F) + 1;
+      }
+      for (int j = 0; j < t; j++) {
+        if (p >= bits) {
+          throw new IllegalArgumentException("run chunk overruns " + bits + " pixels");
         }
-        int t = b & 0x1F;
-        for (int j = 0; j < t; j++) {
-          if (p >= bits) {
-            throw new IllegalArgumentException("run chunk overruns " + bits + " pixels");
-          }
-          px[p++] = c;
-        }
+        px[p++] = c;
       }
     }
     if (p != bits) {

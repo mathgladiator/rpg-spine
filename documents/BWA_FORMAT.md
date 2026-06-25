@@ -38,15 +38,45 @@ that the stream decodes to exactly `bits` pixels.
 
 ## Pixel codec (`BwCodec`)
 
-Pixels are scanned row-major. Each byte is self-describing by its top bit:
+Pixels are scanned row-major. Each byte is self-describing:
 
 - **Detail chunk** `1xxxxxxx` — the low 7 bits are the next 7 pixels, MSB first,
   `1 = black` / `0 = white`. 7 pixels/byte; cannot carry transparency.
-- **Run chunk** `0ccnnnnn` — `cc` is the colour (`0` white, `1` black,
-  `2` transparent; `3` reserved) and `nnnnn` is a run of `1..31` of that colour.
+- **Short run** `0ccnnnnn` (`cc` ≠ `11`) — `cc` is the colour (`0` white, `1`
+  black, `2` transparent) and `nnnnn` holds the count **minus one**, so it covers
+  `1..32` of that colour (the otherwise-dead "run of 0" code is reclaimed).
+- **Long run** `011ccHHH` + `LLLLLLLL` — when the colour field is the otherwise
+  unused `11`, this is a two-byte run: the real colour is `cc` (bits 4–3) and the
+  11-bit `HHH:LLLLLLLL` holds the count **minus one** (covers `1..2048`). Because
+  pixels are row-major, a flat fill or transparent background is one contiguous
+  run, so this collapses it to two bytes instead of one byte per 32 pixels — the
+  main win for background-heavy sprites.
 
 The encoder is **optimal for this alphabet**: a linear DP picks, at each pixel,
-the cheaper of "maximal run" vs "7-pixel detail chunk". `BwCodec.encodedSize`
-returns that true minimum, which the B&W image editor shows in its status bar
-(`rle N B / png N B`) so you can compare the encoded size against the PNG before
-committing art.
+the cheapest of short run / long run / 7-pixel detail chunk. `BwCodec.encodedSize`
+returns that true minimum, shown next to the PNG size in the B&W image editor's
+status bar and in the **Extract region → black & white** dialog
+(`format N B (X% of png)`) so you can confirm the format is a win before saving.
+
+## C decoder (Playdate)
+
+The whole codec is one branch per byte — no tables, no allocation, no libraries:
+
+```c
+// decode `bits` pixels from data[] into out[] (0=white, 1=black, 2=transparent)
+size_t i = 0, p = 0;
+while (i < len) {
+  uint8_t b = data[i++];
+  if (b & 0x80) {                       // detail: 7 mono pixels, MSB first
+    for (int k = 0; k < 7; k++) out[p++] = (b >> (6 - k)) & 1;
+  } else if ((b & 0x60) == 0x60) {      // long run (count stored as count-1)
+    uint8_t c = (b >> 3) & 3;
+    int n = (((b & 7) << 8) | data[i++]) + 1;
+    while (n--) out[p++] = c;
+  } else {                              // short run (count stored as count-1)
+    uint8_t c = (b >> 5) & 3;
+    int n = (b & 0x1F) + 1;
+    while (n--) out[p++] = c;
+  }
+}
+```
