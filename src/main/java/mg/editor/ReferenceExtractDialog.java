@@ -6,13 +6,18 @@ import javafx.scene.Scene;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ChoiceBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.Spinner;
+import javafx.scene.control.SpinnerValueFactory;
 import javafx.scene.control.TextField;
+import javafx.scene.control.ToggleButton;
+import javafx.scene.control.ToggleGroup;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Pane;
@@ -58,8 +63,8 @@ public final class ReferenceExtractDialog {
     if (ref == null) {
       return Optional.empty();
     }
-    int iw = ref.getWidth();
-    int ih = ref.getHeight();
+    final int iw = ref.getWidth();
+    final int ih = ref.getHeight();
     double scale = Math.min(1.0, 520.0 / Math.max(iw, ih));
     double dw = iw * scale;
     double dh = ih * scale;
@@ -72,34 +77,16 @@ public final class ReferenceExtractDialog {
     stack.setPrefSize(dw, dh);
 
     double[] sel = {0, 0, iw, ih}; // x,y,w,h in image coords; default = whole image
-    double[] start = {0, 0};
-    overlay.setOnMousePressed(e -> {
-      start[0] = clamp(e.getX() / scale, 0, iw);
-      start[1] = clamp(e.getY() / scale, 0, ih);
-    });
-    overlay.setOnMouseDragged(e -> {
-      double cx = clamp(e.getX() / scale, 0, iw);
-      double cy = clamp(e.getY() / scale, 0, ih);
-      sel[0] = Math.min(start[0], cx);
-      sel[1] = Math.min(start[1], cy);
-      sel[2] = Math.abs(cx - start[0]);
-      sel[3] = Math.abs(cy - start[1]);
-      drawSel(overlay, scale, sel);
-    });
-    drawSel(overlay, scale, sel);
 
-    // reseed from the last-used settings on this document
+    // reseed conversion controls from the last-used settings on this document
     int seedW = settings != null && settings.width > 0 ? settings.width : defaultSize;
     int seedH = settings != null && settings.height > 0 ? settings.height : defaultSize;
-    Spinner<Integer> tw = new Spinner<>(1, 1024, seedW);
-    tw.setEditable(true);
-    Spinner<Integer> th = new Spinner<>(1, 1024, seedH);
-    th.setEditable(true);
+    Spinner<Integer> tw = intSpinner(1, 1024, seedW);
+    Spinner<Integer> th = intSpinner(1, 1024, seedH);
     ChoiceBox<Dither.Algo> method = new ChoiceBox<>();
     method.getItems().setAll(Dither.Algo.values());
     method.setValue(enumOr(Dither.Algo.class, settings == null ? null : settings.algo, Dither.Algo.FLOYD));
-    Spinner<Integer> level = new Spinner<>(1, 254, settings != null ? settings.threshold : 128);
-    level.setEditable(true);
+    Spinner<Integer> level = intSpinner(1, 254, settings != null ? settings.threshold : 128);
     ChoiceBox<Dither.AlphaMode> alpha = new ChoiceBox<>();
     alpha.getItems().setAll(Dither.AlphaMode.values());
     alpha.setValue(enumOr(Dither.AlphaMode.class, settings == null ? null : settings.alpha, Dither.AlphaMode.WHITE));
@@ -112,29 +99,183 @@ public final class ReferenceExtractDialog {
     preview.setSmooth(false);
     preview.setFitWidth(160);
     preview.setFitHeight(160);
+    Label sizeLabel = new Label();
 
     // default extracted frames into an ext/ subfolder to keep things tidy
     TextField outName = new TextField("ext/" + baseName(refFile) + "-frame.png");
 
-    Label sizeLabel = new Label();
+    // numeric crop-region editors (commit on focus loss / Enter)
+    Spinner<Integer> cropX = intSpinner(0, iw, 0);
+    Spinner<Integer> cropY = intSpinner(0, ih, 0);
+    Spinner<Integer> cropW = intSpinner(1, iw, iw);
+    Spinner<Integer> cropH = intSpinner(1, ih, ih);
+
+    boolean[] syncing = {false};
+
     Runnable doPreview = () -> {
       BufferedImage mono = render(ref, sel, tw.getValue(), th.getValue(), method.getValue(), level.getValue(), alpha.getValue());
       boolean[][] bg = "edge scan".equals(background.getValue()) ? Mono.backgroundMask(mono) : null;
       preview.setImage(previewImage(mono, bg));
       sizeLabel.setText(sizeSummary(mono, bg));
     };
+
+    // any programmatic change to sel -> clamp, mirror into the spinners, redraw, preview
+    Runnable applySel = () -> {
+      clampSel(sel, iw, ih);
+      syncing[0] = true;
+      cropX.getValueFactory().setValue((int) Math.round(sel[0]));
+      cropY.getValueFactory().setValue((int) Math.round(sel[1]));
+      cropW.getValueFactory().setValue((int) Math.round(sel[2]));
+      cropH.getValueFactory().setValue((int) Math.round(sel[3]));
+      syncing[0] = false;
+      drawSel(overlay, scale, sel);
+      doPreview.run();
+    };
+
+    // spinner edit -> sel (guarded so applySel's own writes don't recurse)
+    Runnable selFromSpinners = () -> {
+      if (syncing[0]) {
+        return;
+      }
+      sel[0] = cropX.getValue();
+      sel[1] = cropY.getValue();
+      sel[2] = cropW.getValue();
+      sel[3] = cropH.getValue();
+      applySel.run();
+    };
+
+    // live preview: dropdowns immediate, numeric fields on value change / focus-loss commit
+    method.valueProperty().addListener((o, a, b) -> doPreview.run());
+    alpha.valueProperty().addListener((o, a, b) -> doPreview.run());
+    background.valueProperty().addListener((o, a, b) -> doPreview.run());
+    liveSpinner(tw, doPreview);
+    liveSpinner(th, doPreview);
+    liveSpinner(level, doPreview);
+    liveSpinner(cropX, selFromSpinners);
+    liveSpinner(cropY, selFromSpinners);
+    liveSpinner(cropW, selFromSpinners);
+    liveSpinner(cropH, selFromSpinners);
+
+    // selection mode: draw a new region vs. drag the existing one around
+    ToggleGroup modes = new ToggleGroup();
+    ToggleButton selectMode = new ToggleButton("Select");
+    ToggleButton moveMode = new ToggleButton("Move");
+    selectMode.setToggleGroup(modes);
+    moveMode.setToggleGroup(modes);
+    selectMode.setSelected(true);
+    selectMode.setOnAction(e -> selectMode.setSelected(true)); // keep one always selected
+    moveMode.setOnAction(e -> moveMode.setSelected(true));
+
+    // when checked, drawing a region is constrained to the target W:H aspect ratio
+    CheckBox lockAspect = new CheckBox("Lock to target aspect");
+    lockAspect.setOnAction(e -> {
+      if (lockAspect.isSelected() && th.getValue() > 0) {
+        sel[3] = sel[2] * th.getValue() / tw.getValue(); // conform current height to aspect
+        applySel.run();
+      }
+    });
+
+    double[] start = {0, 0};       // select: anchor corner
+    double[] dragFrom = {0, 0};    // move: mouse-down point
+    double[] selOrigin = {0, 0};   // move: sel x,y at mouse-down
+    overlay.setOnMousePressed(e -> {
+      double mx = clamp(e.getX() / scale, 0, iw);
+      double my = clamp(e.getY() / scale, 0, ih);
+      if (moveMode.isSelected()) {
+        dragFrom[0] = mx;
+        dragFrom[1] = my;
+        selOrigin[0] = sel[0];
+        selOrigin[1] = sel[1];
+      } else {
+        start[0] = mx;
+        start[1] = my;
+      }
+    });
+    overlay.setOnMouseDragged(e -> {
+      double mx = clamp(e.getX() / scale, 0, iw);
+      double my = clamp(e.getY() / scale, 0, ih);
+      if (moveMode.isSelected()) {
+        sel[0] = selOrigin[0] + (mx - dragFrom[0]);
+        sel[1] = selOrigin[1] + (my - dragFrom[1]);
+      } else {
+        double w = Math.abs(mx - start[0]);
+        double h = Math.abs(my - start[1]);
+        if (lockAspect.isSelected() && th.getValue() > 0) {
+          double aspect = (double) tw.getValue() / th.getValue();
+          w = Math.max(w, h * aspect); // grow the box to cover the cursor, then fix h
+          h = w / aspect;
+        }
+        sel[0] = mx >= start[0] ? start[0] : start[0] - w;
+        sel[1] = my >= start[1] ? start[1] : start[1] - h;
+        sel[2] = w;
+        sel[3] = h;
+      }
+      applySel.run();
+    });
+
+    // selection manipulation buttons (common conventions)
+    Button whole = new Button("Whole");
+    whole.setOnAction(e -> { sel[0] = 0; sel[1] = 0; sel[2] = iw; sel[3] = ih; applySel.run(); });
+    Button centerBtn = new Button("Center");
+    centerBtn.setOnAction(e -> { sel[0] = (iw - sel[2]) / 2.0; sel[1] = (ih - sel[3]) / 2.0; applySel.run(); });
+    Button halfCenter = new Button("Half & center");
+    halfCenter.setOnAction(e -> {
+      sel[2] = Math.max(1, Math.round(sel[2] / 2.0));
+      sel[3] = Math.max(1, Math.round(sel[3] / 2.0));
+      sel[0] = (iw - sel[2]) / 2.0;
+      sel[1] = (ih - sel[3]) / 2.0;
+      applySel.run();
+    });
+    Button square = new Button("Square");
+    square.setOnAction(e -> {
+      double s = Math.min(sel[2], sel[3]);
+      double midX = sel[0] + sel[2] / 2.0;
+      double midY = sel[1] + sel[3] / 2.0;
+      sel[2] = s;
+      sel[3] = s;
+      sel[0] = midX - s / 2.0;
+      sel[1] = midY - s / 2.0;
+      applySel.run();
+    });
+    Button expand = new Button("Expand +1");
+    expand.setOnAction(e -> { sel[0] -= 1; sel[1] -= 1; sel[2] += 2; sel[3] += 2; applySel.run(); });
+    Button shrink = new Button("Shrink −1");
+    shrink.setOnAction(e -> {
+      sel[0] += 1;
+      sel[1] += 1;
+      sel[2] = Math.max(1, sel[2] - 2);
+      sel[3] = Math.max(1, sel[3] - 2);
+      applySel.run();
+    });
+    Button doubleCenter = new Button("Double & center");
+    doubleCenter.setOnAction(e -> {
+      sel[2] = sel[2] * 2;
+      sel[3] = sel[3] * 2;
+      sel[0] = (iw - sel[2]) / 2.0;
+      sel[1] = (ih - sel[3]) / 2.0;
+      applySel.run();
+    });
+    Button cropBlack = new Button("Crop black");
+    cropBlack.setOnAction(e -> snap(inkBounds(ref, sel, iw, ih), sel, applySel));
+    Button fitContent = new Button("Fit content");
+    fitContent.setOnAction(e -> snap(contentBounds(ref, sel, iw, ih), sel, applySel));
     Button previewBtn = new Button("Preview");
     previewBtn.setOnAction(e -> doPreview.run());
 
-    Button wholeImage = new Button("Whole image");
-    wholeImage.setOnAction(e -> {
-      sel[0] = 0;
-      sel[1] = 0;
-      sel[2] = iw;
-      sel[3] = ih;
-      drawSel(overlay, scale, sel);
-      doPreview.run();
-    });
+    // crop region: position (X/Y) and size (W/H) grouped into one compact block
+    GridPane cropGrid = new GridPane();
+    cropGrid.setHgap(8);
+    cropGrid.setVgap(6);
+    cropGrid.addRow(0, new Label("X"), cropX, new Label("W"), cropW);
+    cropGrid.addRow(1, new Label("Y"), cropY, new Label("H"), cropH);
+
+    HBox modeBar = new HBox(8, new Label("mode:"), selectMode, moveMode, lockAspect);
+    modeBar.setAlignment(Pos.CENTER_LEFT);
+    FlowPane selButtons = new FlowPane(6, 6,
+        whole, centerBtn, square, halfCenter, doubleCenter, expand, shrink, cropBlack, fitContent);
+
+    Label cropTitle = new Label("Crop region");
+    cropTitle.setStyle("-fx-font-weight: bold;");
 
     GridPane controls = new GridPane();
     controls.setHgap(8);
@@ -206,13 +347,14 @@ public final class ReferenceExtractDialog {
     bar.setAlignment(Pos.CENTER_RIGHT);
     bar.setPadding(new Insets(8));
 
-    VBox imageCol = new VBox(6, stack, wholeImage);
-    BorderPane center = new BorderPane(imageCol);
-    center.setRight(new VBox(new Label("drag a region on the reference"), controls));
-    BorderPane rootPane = new BorderPane(center);
+    VBox imageCol = new VBox(8, stack, cropTitle, modeBar, cropGrid, selButtons);
+    imageCol.setPadding(new Insets(8));
+    BorderPane centerPane = new BorderPane(imageCol);
+    centerPane.setRight(controls);
+    BorderPane rootPane = new BorderPane(centerPane);
     rootPane.setBottom(bar);
     stage.setScene(new Scene(rootPane));
-    doPreview.run();
+    applySel.run(); // initial overlay draw + spinner sync + preview
     stage.showAndWait();
     return result[0];
   }
@@ -247,6 +389,117 @@ public final class ReferenceExtractDialog {
     }
     int pct = (int) Math.round(100.0 * rle / png);
     return "size — png " + png + " B · format " + rle + " B (" + pct + "% of png)";
+  }
+
+  // --------------------------------------------------------- selection helpers
+
+  /** an editable integer spinner. */
+  private static Spinner<Integer> intSpinner(int min, int max, int init) {
+    Spinner<Integer> sp = new Spinner<>(min, max, Math.max(min, Math.min(max, init)));
+    sp.setEditable(true);
+    sp.setPrefWidth(80);
+    return sp;
+  }
+
+  /** wire a spinner to fire {@code onChange} on value change and commit typed text on focus loss / Enter. */
+  private static void liveSpinner(Spinner<Integer> sp, Runnable onChange) {
+    sp.valueProperty().addListener((o, a, b) -> onChange.run());
+    sp.getEditor().setOnAction(e -> commit(sp));
+    sp.focusedProperty().addListener((o, was, now) -> {
+      if (!now) {
+        commit(sp);
+      }
+    });
+  }
+
+  /** parse and clamp the spinner's editor text into its value (reverting on garbage). */
+  private static void commit(Spinner<Integer> sp) {
+    SpinnerValueFactory.IntegerSpinnerValueFactory f =
+        (SpinnerValueFactory.IntegerSpinnerValueFactory) sp.getValueFactory();
+    try {
+      int v = Integer.parseInt(sp.getEditor().getText().trim());
+      f.setValue(Math.max(f.getMin(), Math.min(f.getMax(), v)));
+    } catch (NumberFormatException ex) {
+      sp.getEditor().setText(String.valueOf(sp.getValue()));
+    }
+  }
+
+  /** keep {x,y,w,h} a valid rectangle inside the {@code iw}×{@code ih} image. */
+  private static void clampSel(double[] sel, int iw, int ih) {
+    sel[2] = Math.max(1, Math.min(sel[2], iw));
+    sel[3] = Math.max(1, Math.min(sel[3], ih));
+    sel[0] = Math.max(0, Math.min(sel[0], iw - sel[2]));
+    sel[1] = Math.max(0, Math.min(sel[1], ih - sel[3]));
+  }
+
+  /**
+   * The bounding box of "ink" (opaque, dark) pixels within the current selection,
+   * for the Crop black button — snaps the region to the actual content. Returns
+   * {x,y,w,h} or null if the selection holds no ink.
+   */
+  private static double[] inkBounds(BufferedImage ref, double[] sel, int iw, int ih) {
+    int x0 = (int) Math.round(sel[0]);
+    int y0 = (int) Math.round(sel[1]);
+    int sw = (int) Math.round(sel[2]);
+    int sh = (int) Math.round(sel[3]);
+    x0 = Math.max(0, Math.min(x0, iw - 1));
+    y0 = Math.max(0, Math.min(y0, ih - 1));
+    int x1 = Math.min(iw, x0 + Math.max(1, sw));
+    int y1 = Math.min(ih, y0 + Math.max(1, sh));
+    int minX = x1, minY = y1, maxX = -1, maxY = -1;
+    for (int y = y0; y < y1; y++) {
+      for (int x = x0; x < x1; x++) {
+        int argb = ref.getRGB(x, y);
+        int a = (argb >>> 24) & 0xFF;
+        int lum = (int) Math.round(0.299 * ((argb >> 16) & 0xFF)
+            + 0.587 * ((argb >> 8) & 0xFF) + 0.114 * (argb & 0xFF));
+        if (a >= 128 && lum < 128) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < 0) {
+      return null;
+    }
+    return new double[] {minX, minY, maxX - minX + 1, maxY - minY + 1};
+  }
+
+  /**
+   * The bounding box of opaque (non-transparent) pixels within the current
+   * selection, for the Fit content button — trims away transparent margins
+   * regardless of colour. Returns {x,y,w,h} or null if nothing is opaque.
+   */
+  private static double[] contentBounds(BufferedImage ref, double[] sel, int iw, int ih) {
+    int x0 = Math.max(0, Math.min((int) Math.round(sel[0]), iw - 1));
+    int y0 = Math.max(0, Math.min((int) Math.round(sel[1]), ih - 1));
+    int x1 = Math.min(iw, x0 + Math.max(1, (int) Math.round(sel[2])));
+    int y1 = Math.min(ih, y0 + Math.max(1, (int) Math.round(sel[3])));
+    int minX = x1, minY = y1, maxX = -1, maxY = -1;
+    for (int y = y0; y < y1; y++) {
+      for (int x = x0; x < x1; x++) {
+        if (((ref.getRGB(x, y) >>> 24) & 0xFF) >= 128) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < 0) {
+      return null;
+    }
+    return new double[] {minX, minY, maxX - minX + 1, maxY - minY + 1};
+  }
+
+  /** copy a computed bounds (if any) into the selection and refresh. */
+  private static void snap(double[] bounds, double[] sel, Runnable applySel) {
+    if (bounds != null) {
+      System.arraycopy(bounds, 0, sel, 0, 4);
+      applySel.run();
+    }
   }
 
   /** crop+scale the region (bilinear, alpha-preserving) then convert to 1-bit. */

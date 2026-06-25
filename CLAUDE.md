@@ -182,13 +182,21 @@ Launch flow: `Main` → `EditorLauncher` (sets a static `ROOT`, calls
   `ReferencePanel` manages full-colour `.ref.png` references (prompt-new,
   prompt-onto, add, remove). `ReferenceExtractDialog` selects a region of a
   reference, resamples (Java2D bilinear) to a target size, and converts to 1-bit
-  (any `Dither.Algo`) with preview — the high-fidelity→B&W bridge. A **Whole
-  image** button resets the crop to the full reference; last-used settings persist
-  in `Monster.extract` (`asset.ExtractSettings`) and reseed the next extract.
+  (any `Dither.Algo`) with a **live** preview (dropdowns update immediately;
+  numeric fields commit on focus-loss/Enter) that also shows the encoded `.bwa`
+  size vs the PNG — the high-fidelity→B&W bridge. The crop region is editable by
+  mouse (a **Select** mode drags a new rect, a **Move** mode drags the existing
+  one) and numerically (X/Y/W/H spinners), with buttons **Whole / Center /
+  Half & center / Square / Expand +1 / Shrink −1 / Crop black** (snap to the
+  opaque-dark content bbox). Last-used settings persist in `Monster.extract`
+  (`asset.ExtractSettings`) and reseed the next extract.
 - `Dither` (`mg.assets`) — pure-Java B&W conversions: threshold; ordered Bayer
   2/4/8 + clustered halftone; error diffusion (Floyd–Steinberg, Atkinson, JJN,
-  Stucki, Burkes, Sierra, Sierra Lite, serpentine); and a marching-squares
-  contour. `apply(src, Algo, threshold)` plus a 4-arg form taking an `AlphaMode`
+  Stucki, Burkes, Sierra, Sierra Lite, serpentine); a marching-squares
+  contour; and **outline** (`OUTLINE`) — marching squares on the opaque
+  *silhouette* (white/black both count as inside, transparent as outside) thickened
+  to a Chebyshev `distance` (the threshold), drawn black on a transparent
+  background. `apply(src, Algo, threshold)` plus a 4-arg form taking an `AlphaMode`
   (WHITE/BLACK/TRANSPARENT) for transparent source pixels; tested in `DitherTests`. The reference
   extract dialog and image-editor Import expose the full `Algo` list.
 - `PromptDialog.ask(...)` — a roomy multi-line prompt input used by the reference

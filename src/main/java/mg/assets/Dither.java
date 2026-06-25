@@ -45,7 +45,8 @@ public final class Dither {
     BURKES("Burkes"),
     SIERRA("Sierra"),
     SIERRA_LITE("Sierra Lite"),
-    CONTOUR("Contour (marching squares)");
+    CONTOUR("Contour (marching squares)"),
+    OUTLINE("Outline (silhouette, marching squares)");
 
     private final String label;
 
@@ -71,7 +72,9 @@ public final class Dither {
    */
   public static BufferedImage apply(BufferedImage src, Algo algo, int threshold, AlphaMode alpha) {
     BufferedImage out = apply(src, algo, threshold);
-    if (alpha == null) {
+    // OUTLINE draws its own transparent background, so the alpha reinterpretation
+    // below (which would flood transparent source pixels with white/black) is skipped.
+    if (alpha == null || algo == Algo.OUTLINE) {
       return out;
     }
     boolean hasAlpha = src.getColorModel().hasAlpha();
@@ -108,6 +111,7 @@ public final class Dither {
       case SIERRA -> diffuse(src, SIERRA_K, 32, threshold);
       case SIERRA_LITE -> diffuse(src, SIERRA_LITE_K, 4, threshold);
       case CONTOUR -> contour(src, threshold);
+      case OUTLINE -> outline(src, threshold);
     };
   }
 
@@ -267,6 +271,128 @@ public final class Dither {
       }
     }
     return out;
+  }
+
+  /**
+   * Trace the boundary of the opaque <em>silhouette</em> (white and black count
+   * equally as "inside"; transparent is "outside") with marching squares, then
+   * thicken that line to {@code distance} pixels. The result is a black outline on
+   * a fully transparent background — a halo/border you can lay over the sprite or
+   * use as a sticker edge. {@code distance} 1 is the raw 1px iso-line; larger
+   * values dilate it (a Chebyshev distance band). A source with no alpha has no
+   * silhouette edge and yields an empty image.
+   */
+  public static BufferedImage outline(BufferedImage src, int distance) {
+    int w = src.getWidth();
+    int h = src.getHeight();
+    boolean hasAlpha = src.getColorModel().hasAlpha();
+    boolean[][] inside = new boolean[w][h];
+    for (int x = 0; x < w; x++) {
+      for (int y = 0; y < h; y++) {
+        inside[x][y] = !hasAlpha || ((src.getRGB(x, y) >>> 24) & 0xFF) >= 128;
+      }
+    }
+    boolean[][] mask = new boolean[w][h];
+    for (int y = 0; y + 1 < h; y++) {
+      for (int x = 0; x + 1 < w; x++) {
+        boolean tl = inside[x][y];
+        boolean tr = inside[x + 1][y];
+        boolean br = inside[x + 1][y + 1];
+        boolean bl = inside[x][y + 1];
+        int code = (tl ? 8 : 0) | (tr ? 4 : 0) | (br ? 2 : 0) | (bl ? 1 : 0);
+        double tx = x + 0.5, ty = y;
+        double rx = x + 1, ry = y + 0.5;
+        double bx = x + 0.5, by = y + 1;
+        double lx = x, ly = y + 0.5;
+        switch (code) {
+          case 1, 14 -> lineMask(mask, w, h, lx, ly, bx, by);
+          case 2, 13 -> lineMask(mask, w, h, bx, by, rx, ry);
+          case 3, 12 -> lineMask(mask, w, h, lx, ly, rx, ry);
+          case 4, 11 -> lineMask(mask, w, h, tx, ty, rx, ry);
+          case 6, 9 -> lineMask(mask, w, h, tx, ty, bx, by);
+          case 7, 8 -> lineMask(mask, w, h, tx, ty, lx, ly);
+          case 5 -> { lineMask(mask, w, h, tx, ty, lx, ly); lineMask(mask, w, h, bx, by, rx, ry); }
+          case 10 -> { lineMask(mask, w, h, tx, ty, rx, ry); lineMask(mask, w, h, lx, ly, bx, by); }
+          default -> { /* 0 and 15: no boundary */ }
+        }
+      }
+    }
+    boolean[][] ink = Math.max(1, distance) <= 1 ? mask : within(mask, w, h, distance);
+    BufferedImage out = Mono.newBinary(w, h);
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        if (ink[x][y]) {
+          Mono.set(out, x, y, true);
+        } else {
+          Mono.setTransparent(out, x, y);
+        }
+      }
+    }
+    return out;
+  }
+
+  /** pixels within a Chebyshev {@code distance} of any set pixel (two-pass transform). */
+  private static boolean[][] within(boolean[][] mask, int w, int h, int distance) {
+    int inf = w + h + 1;
+    int[][] dist = new int[w][h];
+    for (int x = 0; x < w; x++) {
+      for (int y = 0; y < h; y++) {
+        dist[x][y] = mask[x][y] ? 0 : inf;
+      }
+    }
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        int m = dist[x][y];
+        if (x > 0) m = Math.min(m, dist[x - 1][y] + 1);
+        if (y > 0) m = Math.min(m, dist[x][y - 1] + 1);
+        if (x > 0 && y > 0) m = Math.min(m, dist[x - 1][y - 1] + 1);
+        if (x < w - 1 && y > 0) m = Math.min(m, dist[x + 1][y - 1] + 1);
+        dist[x][y] = m;
+      }
+    }
+    boolean[][] ink = new boolean[w][h];
+    for (int y = h - 1; y >= 0; y--) {
+      for (int x = w - 1; x >= 0; x--) {
+        int m = dist[x][y];
+        if (x < w - 1) m = Math.min(m, dist[x + 1][y] + 1);
+        if (y < h - 1) m = Math.min(m, dist[x][y + 1] + 1);
+        if (x < w - 1 && y < h - 1) m = Math.min(m, dist[x + 1][y + 1] + 1);
+        if (x > 0 && y < h - 1) m = Math.min(m, dist[x - 1][y + 1] + 1);
+        dist[x][y] = m;
+        ink[x][y] = m < distance;
+      }
+    }
+    return ink;
+  }
+
+  /** Bresenham line into a boolean mask (bounds-checked). */
+  private static void lineMask(boolean[][] mask, int w, int h, double x0d, double y0d, double x1d, double y1d) {
+    int x0 = (int) Math.round(x0d);
+    int y0 = (int) Math.round(y0d);
+    int x1 = (int) Math.round(x1d);
+    int y1 = (int) Math.round(y1d);
+    int dx = Math.abs(x1 - x0);
+    int dy = -Math.abs(y1 - y0);
+    int sx = x0 < x1 ? 1 : -1;
+    int sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+    while (true) {
+      if (x0 >= 0 && y0 >= 0 && x0 < w && y0 < h) {
+        mask[x0][y0] = true;
+      }
+      if (x0 == x1 && y0 == y1) {
+        break;
+      }
+      int e2 = 2 * err;
+      if (e2 >= dy) {
+        err += dy;
+        x0 += sx;
+      }
+      if (e2 <= dx) {
+        err += dx;
+        y0 += sy;
+      }
+    }
   }
 
   /** Bresenham line of black pixels into a Mono image. */

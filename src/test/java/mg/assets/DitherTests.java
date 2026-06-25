@@ -102,4 +102,54 @@ public class DitherTests {
     assertTrue("outline pixels=" + black, black > 8 && black < 120);
     assertFalse("centre should be blank", Mono.isBlack(out, 10, 10));
   }
+
+  @Test
+  public void outlineTracesTheAlphaSilhouetteOnTransparentBackground() {
+    // an opaque square (some white, some black) on a transparent field
+    BufferedImage src = new BufferedImage(20, 20, BufferedImage.TYPE_INT_ARGB);
+    for (int y = 0; y < 20; y++) {
+      for (int x = 0; x < 20; x++) {
+        boolean inside = x >= 6 && x < 14 && y >= 6 && y < 14;
+        // inside mixes white and black to prove they count equally as silhouette
+        int rgb = (x < 10) ? 0x000000 : 0xFFFFFF;
+        src.setRGB(x, y, inside ? (0xFF000000 | rgb) : 0x00000000);
+      }
+    }
+    BufferedImage out = Dither.outline(src, 1);
+    int ink = 0;
+    for (int y = 0; y < 20; y++) {
+      for (int x = 0; x < 20; x++) {
+        if (Mono.isBlack(out, x, y)) ink++;
+      }
+    }
+    assertTrue("outline pixels=" + ink, ink > 8 && ink < 120);
+    // background is transparent, not white
+    assertEquals(Mono.TRANSPARENT, Mono.state(out, 0, 0));
+    // interior of the silhouette is transparent (hollow outline)
+    assertEquals(Mono.TRANSPARENT, Mono.state(out, 10, 10));
+  }
+
+  @Test
+  public void outlineDistanceThickensTheLine() {
+    BufferedImage src = new BufferedImage(24, 24, BufferedImage.TYPE_INT_ARGB);
+    for (int y = 0; y < 24; y++) {
+      for (int x = 0; x < 24; x++) {
+        boolean inside = x >= 6 && x < 18 && y >= 6 && y < 18;
+        src.setRGB(x, y, inside ? 0xFF000000 : 0x00000000);
+      }
+    }
+    int thin = countInk(Dither.outline(src, 1));
+    int thick = countInk(Dither.outline(src, 3));
+    assertTrue("thin=" + thin + " thick=" + thick, thick > thin);
+  }
+
+  private static int countInk(BufferedImage img) {
+    int n = 0;
+    for (int y = 0; y < img.getHeight(); y++) {
+      for (int x = 0; x < img.getWidth(); x++) {
+        if (Mono.isBlack(img, x, y)) n++;
+      }
+    }
+    return n;
+  }
 }
