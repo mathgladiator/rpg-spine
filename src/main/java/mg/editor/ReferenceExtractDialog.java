@@ -21,6 +21,7 @@ import javafx.scene.paint.Color;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
 import javafx.stage.Window;
+import mg.assets.BwCodec;
 import mg.assets.Dither;
 import mg.assets.Mono;
 import mg.editor.asset.ExtractSettings;
@@ -28,6 +29,7 @@ import mg.editor.asset.ExtractSettings;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.util.Optional;
 
@@ -114,10 +116,12 @@ public final class ReferenceExtractDialog {
     // default extracted frames into an ext/ subfolder to keep things tidy
     TextField outName = new TextField("ext/" + baseName(refFile) + "-frame.png");
 
+    Label sizeLabel = new Label();
     Runnable doPreview = () -> {
       BufferedImage mono = render(ref, sel, tw.getValue(), th.getValue(), method.getValue(), level.getValue(), alpha.getValue());
       boolean[][] bg = "edge scan".equals(background.getValue()) ? Mono.backgroundMask(mono) : null;
       preview.setImage(previewImage(mono, bg));
+      sizeLabel.setText(sizeSummary(mono, bg));
     };
     Button previewBtn = new Button("Preview");
     previewBtn.setOnAction(e -> doPreview.run());
@@ -143,9 +147,10 @@ public final class ReferenceExtractDialog {
     controls.addRow(r++, new Label("save as"), outName);
     controls.add(previewBtn, 0, r);
     controls.add(preview, 1, r, 3, 1);
+    controls.add(sizeLabel, 0, r + 1, 4, 1);
     Label legend = new Label("preview: green = transparent · blue = detected background");
     legend.setStyle("-fx-opacity: 0.7;");
-    controls.add(legend, 0, r + 1, 4, 1);
+    controls.add(legend, 0, r + 2, 4, 1);
 
     Stage stage = new Stage();
     stage.initOwner(owner);
@@ -210,6 +215,38 @@ public final class ReferenceExtractDialog {
     doPreview.run();
     stage.showAndWait();
     return result[0];
+  }
+
+  /**
+   * Compare the PNG size of the extracted frame against the single-byte RLE/detail
+   * bank format ({@link BwCodec}), so you can judge whether the new format is a win
+   * before saving. Measures exactly what would be written, transparency included.
+   */
+  private static String sizeSummary(BufferedImage mono, boolean[][] bg) {
+    BufferedImage out = Mono.copy(mono);
+    if (bg != null) {
+      for (int y = 0; y < out.getHeight(); y++) {
+        for (int x = 0; x < out.getWidth(); x++) {
+          if (bg[x][y]) {
+            Mono.setTransparent(out, x, y);
+          }
+        }
+      }
+    }
+    int rle = BwCodec.encodedSize(BwCodec.pixelsOf(out));
+    long png = -1;
+    try {
+      ByteArrayOutputStream bo = new ByteArrayOutputStream();
+      ImageIO.write(out, "png", bo);
+      png = bo.size();
+    } catch (Exception ignored) {
+      // png stays -1 (unavailable)
+    }
+    if (png < 0) {
+      return "size — format " + rle + " B";
+    }
+    int pct = (int) Math.round(100.0 * rle / png);
+    return "size — png " + png + " B · format " + rle + " B (" + pct + "% of png)";
   }
 
   /** crop+scale the region (bilinear, alpha-preserving) then convert to 1-bit. */

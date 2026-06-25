@@ -21,7 +21,8 @@
       "WebFetch(domain:docs.meshy.ai)",
       "Bash(mvn -q test -Dtest=MonoTests)",
       "Bash(mvn -q package -DskipTests)",
-      "WebFetch(domain:api.pixellab.ai)"
+      "WebFetch(domain:api.pixellab.ai)",
+      "Bash(mvn test *)"
     ]
   }
 }

@@ -83,6 +83,71 @@ public final class Skeleton {
   }
 
   /**
+   * Turn a single <b>rest pose</b> ({@code [18][2]} normalized, e.g. from
+   * estimate-skeleton) into a walk cycle by swinging the limbs around their
+   * detected positions — so the gait matches the character's real proportions
+   * without any hand-posing. Returns {@code [frames][18][2]} normalized.
+   */
+  public static double[][][] walkFromRest(double[][] rest, int frames, boolean profile) {
+    int n = Math.max(2, frames);
+    double swing = profile ? 0.10 : 0.06; // horizontal limb swing (normalized)
+    double raise = 0.05;                   // foot lift (normalized)
+    int ll = idx("LEFT LEG");
+    int rl = idx("RIGHT LEG");
+    int lk = idx("LEFT KNEE");
+    int rk = idx("RIGHT KNEE");
+    int la = idx("LEFT ARM");
+    int ra = idx("RIGHT ARM");
+    int le = idx("LEFT ELBOW");
+    int re = idx("RIGHT ELBOW");
+    double[][][] out = new double[n][][];
+    for (int i = 0; i < n; i++) {
+      double p = 2 * Math.PI * i / n;
+      double legL = Math.sin(p);
+      double legR = Math.sin(p + Math.PI);
+      double armL = Math.sin(p + Math.PI);
+      double armR = Math.sin(p);
+      double[][] f = copyPose(rest);
+      shift(f, ll, legL * swing, -Math.max(0, legL) * raise);
+      shift(f, rl, legR * swing, -Math.max(0, legR) * raise);
+      shift(f, lk, legL * swing * 0.6, -Math.max(0, legL) * raise * 0.5);
+      shift(f, rk, legR * swing * 0.6, -Math.max(0, legR) * raise * 0.5);
+      shift(f, la, armL * swing * 0.8, 0);
+      shift(f, ra, armR * swing * 0.8, 0);
+      shift(f, le, armL * swing * 0.4, 0);
+      shift(f, re, armR * swing * 0.4, 0);
+      out[i] = f;
+    }
+    return out;
+  }
+
+  /** index of a label in {@link #LABELS}, or -1. */
+  public static int idx(String label) {
+    for (int i = 0; i < LABELS.length; i++) {
+      if (LABELS[i].equals(label)) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  private static void shift(double[][] f, int j, double dx, double dy) {
+    if (j >= 0 && j < f.length) {
+      f[j][0] = Math.max(0, Math.min(1, f[j][0] + dx));
+      f[j][1] = Math.max(0, Math.min(1, f[j][1] + dy));
+    }
+  }
+
+  private static double[][] copyPose(double[][] src) {
+    double[][] c = new double[src.length][2];
+    for (int i = 0; i < src.length; i++) {
+      c[i][0] = src[i][0];
+      c[i][1] = src[i][1];
+    }
+    return c;
+  }
+
+  /**
    * A walk-cycle template as <b>normalized</b> frames: {@code [frames][18][2]} in
    * 0..1, joints in {@link #LABELS} order. Resolution-independent — scale to the
    * output size at request time. Used to seed an editable skeleton.

@@ -157,9 +157,21 @@ public final class SkeletonAnimateDialog {
     reset.setOnAction(e -> regen.run());
     Button estimate = new Button("Estimate from image");
     estimate.setOnAction(e -> PixelLabGen.estimateSkeleton(owner, refFile, kps -> {
+      if (kps.isEmpty()) {
+        return;
+      }
+      // auto-detect coordinate space: PixelLab may return 0..1 normalized or
+      // pixel coords. If everything is <= ~1.5 it's already normalized.
+      double maxc = 0;
+      for (PixelLab.Keypoint kp : kps) {
+        maxc = Math.max(maxc, Math.max(kp.x(), kp.y()));
+      }
+      boolean normalized = maxc <= 1.5;
+      double divX = normalized ? 1 : (refW > 1 ? refW : Math.max(1, maxc));
+      double divY = normalized ? 1 : (refH > 1 ? refH : Math.max(1, maxc));
       Map<String, double[]> byLabel = new HashMap<>();
       for (PixelLab.Keypoint kp : kps) {
-        byLabel.put(kp.label(), new double[] {clamp(kp.x() / refW), clamp(kp.y() / refH)});
+        byLabel.put(kp.label(), new double[] {clamp(kp.x() / divX), clamp(kp.y() / divY)});
       }
       for (double[][] frame : working) {
         for (int j = 0; j < Skeleton.LABELS.length; j++) {
@@ -172,10 +184,22 @@ public final class SkeletonAnimateDialog {
       }
       redraw.run();
     }));
-    controls.add(new HBox(8, reset, estimate), 0, r++, 4, 1);
-    Label note = new Label("Drag joints to pose each frame; scrub to switch frames.\n"
-        + "‘Estimate from image’ detects the joints with AI and overwrites them.\n"
-        + "Saved in the .monster, keyed to this reference. Output frames go to ref/.");
+    Button walkBtn = new Button("Animate walk");
+    walkBtn.setOnAction(e -> {
+      double[][][] w = Skeleton.walkFromRest(working.get(0), frames.getValue(), map(direction.getValue()).profile());
+      working.clear();
+      for (double[][] fr : w) {
+        working.add(fr);
+      }
+      scrub.setMax(Math.max(0, working.size() - 1));
+      frameIndex[0] = 0;
+      scrub.setValue(0);
+      redraw.run();
+    });
+    controls.add(new HBox(8, reset, estimate, walkBtn), 0, r++, 4, 1);
+    Label note = new Label("Flow: ‘Estimate from image’ detects the joints (one rest pose), then\n"
+        + "‘Animate walk’ swings the limbs into a walk cycle — no hand-posing needed.\n"
+        + "Drag joints to fine-tune; scrub frames. Saved in the .monster per reference.");
     note.setWrapText(true);
     note.setStyle("-fx-opacity: 0.7;");
     controls.add(note, 0, r, 4, 1);

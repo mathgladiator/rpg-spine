@@ -95,9 +95,11 @@ domain** and live in a `ref/` subfolder next to the `.monster`:
 `side` view), a frame count and output size, then **drag the skeleton joints** to
 pose each frame (scrub between frames; `Reset to template` reseeds a walk gait).
 The skeleton (`mg.assets.Skeleton`, the 18 PixelLab joint labels) sets the
-per-frame pose; the direction sets facing. **Estimate from image** calls
-`/estimate-skeleton` to detect the joints with AI and overwrite them (no manual
-posing). For a fully no-skeleton path, use **Animate…** (`animate-with-text`): a reference
+per-frame pose; the direction sets facing. The no-hand-posing flow is **Estimate
+from image** (calls `/estimate-skeleton` to detect the joints — one rest pose;
+coordinate space is auto-detected, normalized-vs-pixel) → **Animate walk**
+(`Skeleton.walkFromRest` swings the limbs around the detected joints into a walk
+cycle). `/estimate-skeleton` itself returns only a single pose, not an animation. For a fully no-skeleton path, use **Animate…** (`animate-with-text`): a reference
 + an action verb ("walk"), with a **follow-reference** strength
 (`image_guidance_scale`, 1–20; default raised to ~6 because PixelLab's own 1.4
 default ignores the reference and invents from the text). The posed skeleton is **cached in the

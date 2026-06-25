@@ -26,6 +26,7 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import javafx.stage.FileChooser;
 import javafx.util.Duration;
+import mg.assets.BwCodec;
 import mg.assets.Dither;
 import mg.assets.Mono;
 
@@ -312,7 +313,23 @@ public class BwImageEditor implements Editor {
     BufferedImage frame = Mono.region(img, frameIndex * cellW, 0, cellW, img.getHeight());
     preview.setImage(BwCanvas.toFxImage(frame));
     status.setText(file.getName() + " — " + img.getWidth() + "×" + img.getHeight()
-        + " — frame " + (frameIndex + 1) + "/" + n);
+        + " — frame " + (frameIndex + 1) + "/" + n + " — " + sizePreview(img));
+  }
+
+  /** encoded size in the bank's RLE/detail scheme vs the PNG, so they can be compared. */
+  private static String sizePreview(BufferedImage img) {
+    int rle = BwCodec.encodedSize(BwCodec.pixelsOf(img));
+    long png = -1;
+    try {
+      java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+      ImageIO.write(img, "png", bo);
+      png = bo.size();
+    } catch (Exception ignored) {
+      // leave png as -1 (unavailable)
+    }
+    return png < 0
+        ? "rle " + rle + " B"
+        : "rle " + rle + " B / png " + png + " B";
   }
 
   private void startPlayer() {

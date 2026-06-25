@@ -204,8 +204,10 @@ Launch flow: `Main` → `EditorLauncher` (sets a static `ROOT`, calls
   keyed by reference path) and persisted in the `.monster`.
   `PixelLab.animateWithSkeleton` sends `inpainting_images`/`mask_images`
   null-arrays matching the frame count (required, else "Expected N pose images").
-  `PixelLab.estimateSkeleton` (`/estimate-skeleton`) detects joints from an image;
-  the dialog's **Estimate from image** overwrites the joints with them.
+  `PixelLab.estimateSkeleton` (`/estimate-skeleton`) detects joints from an image
+  (one rest pose; the dialog auto-detects normalized-vs-pixel coords). The flow:
+  **Estimate from image** → **Animate walk** (`Skeleton.walkFromRest` swings the
+  detected limbs into a walk cycle, no hand-posing).
   `PixelLabGen.scaledPng` rescales the reference to the request `image_size`
   before animate/skeleton calls (PixelLab requires reference==image_size; a 128px
   ref vs 64px animate-with-text caused a tensor-size 500). The fully no-skeleton
@@ -269,6 +271,10 @@ editors and live Meshy calls have not been smoke-tested in a running app.
   animation states, 1-bit sheet format).
 - `documents/ASSET_PIPELINE.md` — the B&W rule, `Mono`, Meshy workflows, resize
   algorithm, `.project` settings, and the in-editor transform tools.
+- `documents/BWA_FORMAT.md` — the `.bwa` single-file animation bank (magic `0x42`,
+  per-animation header + checksum) and its single-byte RLE/detail pixel codec
+  (`mg.assets.BwAnimBank` / `AnimType` / `BwCodec`). The B&W image editor shows the
+  encoded size next to the PNG size in its status bar.
 - `documents/AI.GEN.md` — options analysis for the image-gen backend (Meshy ≈
   Google nano-banana; PixelLab/Retro Diffusion for native sprites; FLUX/Gemini
   direct), and the recommended `ImageGen` provider abstraction.
