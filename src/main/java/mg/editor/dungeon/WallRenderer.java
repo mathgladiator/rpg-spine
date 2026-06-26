@@ -46,20 +46,43 @@ public final class WallRenderer {
 
   /** fill the wall bodies for cells [x0,x0+w) × [y0,y0+h) using {@code algo}. */
   public static void fill(GraphicsContext g, Dungeon.Fill algo, double s, int x0, int y0, int w, int h, Cells c) {
+    Cells cc = confine(c, x0, y0, w, h);
     switch (algo) {
-      case SQUARES -> squaresFill(g, s, x0, y0, w, h, c);
-      case MARCHING -> marchingFill(g, s, x0, y0, w, h, c);
-      case DIAGONAL -> diagonalFill(g, s, x0, y0, w, h, c);
+      case SQUARES -> squaresFill(g, s, x0, y0, w, h, cc);
+      case MARCHING -> marchingFill(g, s, x0, y0, w, h, cc);
+      case DIAGONAL -> diagonalFill(g, s, x0, y0, w, h, cc);
     }
   }
 
   /** stroke the inferred boundary (caller sets stroke colour/width/dashes). */
   public static void boundary(GraphicsContext g, Dungeon.Fill algo, double s, int x0, int y0, int w, int h, Cells c) {
+    Cells cc = confine(c, x0, y0, w, h);
     switch (algo) {
-      case SQUARES -> squaresBoundary(g, s, x0, y0, w, h, c);
-      case MARCHING -> marchingBoundary(g, s, x0, y0, w, h, c);
-      case DIAGONAL -> diagonalBoundary(g, s, x0, y0, w, h, c);
+      case SQUARES -> squaresBoundary(g, s, x0, y0, w, h, cc);
+      case MARCHING -> marchingBoundary(g, s, x0, y0, w, h, cc);
+      case DIAGONAL -> diagonalBoundary(g, s, x0, y0, w, h, cc);
     }
+  }
+
+  /**
+   * A view that clamps every lookup to the cell box [x0,x0+w) × [y0,y0+h), so an
+   * algorithm reads <em>only</em> this macro's cells: out-of-box reads return the
+   * nearest edge cell (the edge is replicated outward). This stops the DIAGONAL
+   * dual grid from bleeding across macro boundaries and makes every algorithm meet
+   * a macro boundary on the micro-cell grid — a consistent interface regardless of
+   * which algorithm a neighbouring macro uses.
+   */
+  private static Cells confine(Cells c, int x0, int y0, int w, int h) {
+    int xa = x0, ya = y0, xb = x0 + w - 1, yb = y0 + h - 1;
+    return new Cells() {
+      @Override public boolean occupied(int x, int y) { return c.occupied(clamp(x, xa, xb), clamp(y, ya, yb)); }
+      @Override public Color color(int x, int y) { return c.color(clamp(x, xa, xb), clamp(y, ya, yb)); }
+      @Override public int weight(int x, int y) { return c.weight(clamp(x, xa, xb), clamp(y, ya, yb)); }
+    };
+  }
+
+  private static int clamp(int v, int lo, int hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
   }
 
   // ----- SQUARES --------------------------------------------------------------

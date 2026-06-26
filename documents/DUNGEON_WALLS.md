@@ -44,6 +44,14 @@ colour. A DIAGONAL contour cell spans up to four cells; it uses the single
 **majority** material among its occupied corners (ties → scan order), never an
 average — so a dirt/stone seam stays crisp instead of going muddy.
 
+**No cross-macro bleed.** Each algorithm reads <em>only</em> its own macro's cells:
+out-of-macro lookups clamp to the nearest edge cell (the edge is replicated
+outward). DIAGONAL's dual grid would otherwise sample cell centers in the
+neighbouring macro and round/connect across the seam; clamping makes every
+algorithm terminate on the micro-cell grid at a macro boundary, so the interface
+between two macro cells is identical regardless of which algorithm each uses (and
+the C renderer can process one macro at a time).
+
 ## DIAGONAL geometry (dual-grid marching squares)
 
 The surface is the **iso-contour of a dual grid** whose lattice corners are the
