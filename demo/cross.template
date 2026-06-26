@@ -1,0 +1,6 @@
+template name="cross" width=5 height=5
+row y=0 cells="__#__"
+row y=1 cells="__#__"
+row y=2 cells="#####"
+row y=3 cells="__#__"
+row y=4 cells="__#__"

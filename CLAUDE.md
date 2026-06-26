@@ -103,6 +103,7 @@ Launch flow: `Main` → `EditorLauncher` (sets a static `ROOT`, calls
 |------------|-------------------|------------------------------|
 | `.rpg`     | `RpgEditor`       | parsed by `mg.tree.Parser`   |
 | `.dungeon` | `DungeonEditor`   | `dungeon.Dungeon`            |
+| `.template`| `TemplateEditor`  | `dungeon.Template`           |
 | `.world`   | `WorldEditor`     | `world.World`                |
 | `.monster` | `MonsterEditor`   | `monster.Monster`            |
 | `.item`    | `ItemEditor`      | `item.Item`                  |
@@ -284,11 +285,15 @@ editors and live Meshy calls have not been smoke-tested in a running app.
   (`mg.assets.BwAnimBank` / `AnimType` / `BwCodec`). The B&W image editor shows the
   encoded size next to the PNG size in its status bar.
 - `documents/DUNGEON_WALLS.md` — the redesigned `.dungeon` model: a micro/macro
-  occupancy grid (walls implicit), the per-cell marching-squares/metaball wall
-  inference (weight = stone-sharp…dirt-smooth) the editor and C ray caster must
-  share, and the `solid(u,v)` point-in-wall test. Features (ladder/hole/portal)
-  anchor to macro centers; monsters (with a size 1–5) sit on micro cells and are
-  validated by the asset audit against project `.monster` ids.
+  occupancy grid (walls implicit) and the **dual-grid marching-squares** wall
+  inference in `dungeon.WallRenderer` (corners at cell centers → infers diagonal
+  lines; weight = stone-sharp…dirt-smooth bow) that the editor and C ray caster
+  share, plus the point-in-wall test. The editor adds a brush (shape + size), a
+  line tool with live preview, and stampable `Template`s (`dungeon.Template`,
+  built-ins + project `.template` files) previewed under the cursor. Features
+  (ladder/hole/portal/**target**) anchor to macro centers; ladders/holes/portals
+  reference a named `TARGET` **by id**, not coordinates. Monsters (size 1–5) sit on
+  micro cells and are validated by the asset audit against project `.monster` ids.
 - `documents/AI.GEN.md` — options analysis for the image-gen backend (Meshy ≈
   Google nano-banana; PixelLab/Retro Diffusion for native sprites; FLUX/Gemini
   direct), and the recommended `ImageGen` provider abstraction.

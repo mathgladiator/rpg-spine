@@ -50,13 +50,18 @@ public class DungeonModelTests {
     lv.cells[3][4] = floor;
     lv.cells[5][6] = floor;
 
+    Dungeon.Feature target = new Dungeon.Feature();
+    target.type = Dungeon.FeatureType.TARGET;
+    target.mx = 3;
+    target.my = 3;
+    target.id = "vault";
+    lv.features.add(target);
+
     Dungeon.Feature feat = new Dungeon.Feature();
     feat.type = Dungeon.FeatureType.PORTAL;
     feat.mx = 1;
     feat.my = 2;
-    feat.targetLevel = 0;
-    feat.targetMX = 3;
-    feat.targetMY = 3;
+    feat.dest = "vault";
     feat.note = "to the vault";
     lv.features.add(feat);
 
@@ -80,14 +85,17 @@ public class DungeonModelTests {
     assertFalse("carved cell is open", back.isWall(bl.cells[3][4]));
     assertTrue("untouched cell is solid", back.isWall(bl.cells[0][0]));
 
-    assertEquals(1, bl.features.size());
-    Dungeon.Feature bf = bl.features.get(0);
-    assertEquals(Dungeon.FeatureType.PORTAL, bf.type);
-    assertEquals(1, bf.mx);
-    assertEquals(2, bf.my);
-    assertEquals(0, bf.targetLevel);
-    assertEquals(3, bf.targetMX);
-    assertEquals("to the vault", bf.note);
+    assertEquals(2, bl.features.size());
+    assertEquals(java.util.List.of("vault"), back.targetIds());
+    Dungeon.Feature portal = bl.features.stream()
+        .filter(x -> x.type == Dungeon.FeatureType.PORTAL).findFirst().orElseThrow();
+    assertEquals(1, portal.mx);
+    assertEquals(2, portal.my);
+    assertEquals("vault", portal.dest);
+    assertEquals("to the vault", portal.note);
+    Dungeon.Feature tgt = bl.features.stream()
+        .filter(x -> x.type == Dungeon.FeatureType.TARGET).findFirst().orElseThrow();
+    assertEquals("vault", tgt.id);
 
     assertEquals(1, bl.monsters.size());
     assertEquals("goblin", bl.monsters.get(0).monsterId);

@@ -41,8 +41,13 @@ public class Dungeon {
   /** a palette entry is either open floor or solid wall. */
   public enum Kind { FLOOR, WALL }
 
-  /** what a feature does; all anchor to a macro-cell center. */
-  public enum FeatureType { LADDER_UP, LADDER_DOWN, HOLE, PORTAL }
+  /**
+   * What a feature does; all anchor to a macro-cell center. {@link #TARGET} is a
+   * named destination any cell can become; ladders/holes/portals send the party to
+   * a target <em>by id</em> rather than by coordinates, so moving a target never
+   * breaks its references.
+   */
+  public enum FeatureType { LADDER_UP, LADDER_DOWN, HOLE, PORTAL, TARGET }
 
   /** a paint material: a colour plus whether it is floor (open) or wall (occupied). */
   public static final class Material {
@@ -63,14 +68,15 @@ public class Dungeon {
     }
   }
 
-  /** a ladder/hole/portal anchored to the center of macro cell (mx,my). */
+  /** a ladder/hole/portal/target anchored to the center of macro cell (mx,my). */
   public static final class Feature {
     public FeatureType type = FeatureType.LADDER_DOWN;
     public int mx;
     public int my;
-    public int targetLevel = -1;
-    public int targetMX = -1;
-    public int targetMY = -1;
+    /** for TARGET: this destination's name. */
+    public String id = "";
+    /** for ladder/hole/portal: the target id the party is sent to. */
+    public String dest = "";
     public String note = "";
   }
 
@@ -233,8 +239,11 @@ public class Dungeon {
       for (Feature f : lv.features) {
         sb.append("feature type=").append(f.type.name().toLowerCase())
             .append(" mx=").append(f.mx).append(" my=").append(f.my);
-        if (f.targetLevel >= 0) {
-          sb.append(" tgt=").append(f.targetLevel).append(':').append(f.targetMX).append(',').append(f.targetMY);
+        if (!f.id.isEmpty()) {
+          sb.append(" id=").append(KV.q(f.id));
+        }
+        if (!f.dest.isEmpty()) {
+          sb.append(" dest=").append(KV.q(f.dest));
         }
         if (!f.note.isEmpty()) {
           sb.append(" note=").append(KV.q(f.note));
@@ -260,6 +269,19 @@ public class Dungeon {
       for (MonsterPlacement mp : lv.monsters) {
         if (mp.monsterId != null && !mp.monsterId.isBlank()) {
           out.add(mp.monsterId);
+        }
+      }
+    }
+    return out;
+  }
+
+  /** every named TARGET id defined anywhere in the dungeon (destinations to pick from). */
+  public List<String> targetIds() {
+    List<String> out = new ArrayList<>();
+    for (Level lv : levels) {
+      for (Feature f : lv.features) {
+        if (f.type == FeatureType.TARGET && f.id != null && !f.id.isBlank()) {
+          out.add(f.id);
         }
       }
     }
@@ -314,18 +336,8 @@ public class Dungeon {
           f.type = parseFeature(kv.get("type", "ladder_down"));
           f.mx = kv.getInt("mx", 0);
           f.my = kv.getInt("my", 0);
-          String tgt = kv.get("tgt", "");
-          if (!tgt.isEmpty()) {
-            try {
-              int colon = tgt.indexOf(':');
-              f.targetLevel = Integer.parseInt(tgt.substring(0, colon));
-              String[] xy = tgt.substring(colon + 1).split(",");
-              f.targetMX = Integer.parseInt(xy[0]);
-              f.targetMY = Integer.parseInt(xy[1]);
-            } catch (Exception ignore) {
-              // leave target unset
-            }
-          }
+          f.id = kv.get("id", "");
+          f.dest = kv.get("dest", "");
           f.note = kv.get("note", "");
           cur.features.add(f);
         }

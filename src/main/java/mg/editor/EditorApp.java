@@ -449,6 +449,7 @@ public class EditorApp extends Application {
         : "Select a file on the left to edit.\n\n"
             + ".rpg     schema, validated by the spine parser\n"
             + ".dungeon micro/macro occupancy grid map editor\n"
+            + ".template reusable wall/floor stamp for dungeons\n"
             + ".world   location/path graph + scene editor\n"
             + ".monster monster art + level/skill tables\n"
             + ".item    item with type-specific properties\n"
@@ -850,6 +851,9 @@ public class EditorApp extends Application {
     }
     if (name.endsWith(".dungeon")) {
       return new DungeonEditor(file, status);
+    }
+    if (name.endsWith(".template")) {
+      return new TemplateEditor(file, status);
     }
     if (name.endsWith(".world")) {
       return new WorldEditor(file, status);

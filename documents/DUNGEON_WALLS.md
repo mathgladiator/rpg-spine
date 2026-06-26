@@ -27,72 +27,87 @@ o(x, y) = 1 for any (x,y) outside the level   // the world is solid rock
 
 ## Per-cell wall geometry (marching-squares / metaball)
 
-Each **wall** cell is rendered (and collided) **in isolation** from only its four
-edge neighbours — so cells across a macro boundary stitch together automatically,
-with no global state. For wall cell `(x,y)`:
+The surface is the **iso-contour of a dual grid** whose lattice corners are the
+cell **centers** (not cell corners). Each *dual square* sits between four adjacent
+cell centers and is classified by which of those four cells are walls — the
+classic 4-bit marching-squares code. Because the corners are cell centers, a
+single wall cell is a small diamond "column", and two wall cells that touch
+**orthogonally _or diagonally_** are joined by a band: this is what infers
+diagonal lines that a per-corner rounding pass cannot.
+
+For dual square with corner cells `a = o(i,j)` (TL), `b = o(i+1,j)` (TR),
+`c = o(i+1,j+1)` (BR), `d = o(i,j+1)` (BL):
 
 ```
-openN = o(x, y-1) == 0
-openE = o(x+1, y) == 0
-openS = o(x, y+1) == 0
-openW = o(x-1, y) == 0
+code = a*8 + b*4 + c*2 + d        // 0..15
 ```
 
-A **corner is convex** (and gets rounded) exactly when its two adjacent edges are
-both open:
+Crossing points sit at the **midpoints** of the square's sides (`mT,mR,mB,mL`).
+The occupied (wall) polygon for each code is the occupied corners plus the
+relevant midpoints:
+
+| code(s)        | wall polygon                          | boundary edge(s)        |
+|----------------|---------------------------------------|-------------------------|
+| 0              | —                                     | —                       |
+| 15             | full square `TL TR BR BL`             | none                    |
+| 1/2/4/8        | triangle at the one occupied corner   | the mid–mid edge        |
+| 3/6/9/12       | quad over the two adjacent corners    | the mid–mid edge        |
+| 7/11/13/14     | pentagon (square minus one corner)    | the mid–mid edge        |
+| **5 / 10**     | hexagon **connecting the diagonal**   | two mid–mid edges       |
+
+Cases 5 and 10 are the saddle: we **always connect** the two diagonally-occupied
+corners (cut the two open corners off), so staggered cells form a continuous
+diagonal wall.
+
+### Weight = smoothness
+
+Each boundary (mid–mid) edge is bowed **outward**, away from the occupied
+centroid, by the wall material's weight:
 
 ```
-convexTL = openN && openW      convexTR = openN && openE
-convexBL = openS && openW      convexBR = openS && openE
+bow = (1 - weight/100) * MAX_BOW       // MAX_BOW ≈ 0.5 of the half-diagonal
+control = midpoint + (midpoint - occupiedCentroid) * bow
 ```
 
-The rounding radius comes from the wall material's **weight** (0–100):
+- `weight = 100` → `bow = 0`: straight chamfers — crisp **stone**, clean diagonals.
+- `weight = 0`   → rounded edges — organic **dirt**.
 
-```
-r = (1 - weight/100) * 0.5      // in cell units (× cellSize for pixels)
-```
-
-- `weight = 100` → `r = 0`: square corners, hard edges — **stone**.
-- `weight = 0`   → `r = 0.5`: fully rounded corner — **dirt** flows smooth.
-
-The wall solid for the cell is the unit square with each convex corner replaced by
-a quarter-circle of radius `r` whose center is inset `r` from that corner. The
-inferred **wall boundary** (drawn dotted purple in the editor) is, for every cell
-side that faces an open neighbour, that side trimmed by `r` at convex ends, joined
-by the corner quarter-arcs. Non-convex corners stay square, so straight walls stay
-straight at every weight — only free corners round.
+The colour/weight of a dual square is the average over its occupied corner cells
+(out-of-bounds corners contribute solid rock, weight 100). The same edges, stroked
+dotted purple, are the **inferred wall boundary** shown in the editor.
 
 ## C ray caster: point-in-wall test
 
-Everything the ray caster needs is a per-cell **solidity test** in the cell's
-local coordinates `(u,v) ∈ [0,1]²`. A point is solid unless it falls in a
-rounded-off convex corner notch:
+The geometry is local to one dual square — O(1), no precomputed mesh. To test a
+point `P` (in cell-center coordinates, so cell `(i,j)`'s center is at integer
+`(i,j)`):
 
 ```c
-// weight 0..100 for this cell's material; corners from the 4 edge neighbours
-float r = (1.0f - weight / 100.0f) * 0.5f;
-
-int solid(float u, float v) {            // u,v in [0,1] within a WALL cell
-  if (u < 0 || u > 1 || v < 0 || v > 1) return 0;
-  if (convexTL && u < r     && v < r     && hypotf(u-r,     v-r)     > r) return 0;
-  if (convexTR && u > 1 - r && v < r     && hypotf(u-(1-r), v-r)     > r) return 0;
-  if (convexBR && u > 1 - r && v > 1 - r && hypotf(u-(1-r), v-(1-r)) > r) return 0;
-  if (convexBL && u < r     && v > 1 - r && hypotf(u-r,     v-(1-r)) > r) return 0;
-  return 1;
-}
+int i = (int)floorf(P.x), j = (int)floorf(P.y);   // dual square index
+int a = occ(i,j), b = occ(i+1,j), c = occ(i+1,j+1), d = occ(i,j+1);
+int code = a*8 + b*4 + c*2 + d;
+// local coords u,v in [0,1] within the dual square:
+float u = P.x - i, v = P.y - j;
+// classify against the case polygon (straight-edge form; the weight bow is cosmetic
+// and may be ignored for collision). Half-cell triangles use the lines through the
+// side midpoints (0.5):
+return point_in_case_polygon(code, u, v);
 ```
 
-For a DDA/grid ray caster: step cell to cell as usual; when you enter a wall cell,
-compute `r` and the four `convex*` flags from that cell's neighbours, then refine
-the hit by marching the ray in small steps (or analytically intersecting the
-corner arcs) using `solid()`. Because the test only reads the entered cell and its
-four neighbours, it is O(1) per cell and needs no precomputed mesh.
+`point_in_case_polygon` is a small switch mirroring the table above (each polygon
+is convex, so a handful of half-plane tests suffice; cases 5/10 are the union of
+two triangles). A DDA ray caster steps cell to cell, and within each dual square
+refines the hit against this polygon. Including the quadratic bow is optional and
+only affects how round the silhouette looks, not connectivity.
 
 ## Notes
 
 - Floors are flat; only wall cells contribute geometry.
-- The macro grid is purely a movement/feature quantization — the wall inference
-  ignores it, which is exactly why 5×5 regions connect to their neighbours
-  naturally.
-- Keep this file in lockstep with `DungeonEditor.drawWallBlob` /
-  `drawBoundary` (Java preview) and the device renderer.
+- The macro grid is purely movement/feature quantization — the wall inference
+  ignores it, which is why 5×5 regions connect to their neighbours naturally.
+- Ladders/holes/portals send the party to a named **target** (`FeatureType.TARGET`,
+  any macro cell) **by id**, never by coordinates, so editing the map can't break a
+  link. `.template` files are reusable wall/open/skip stamps drawn with the same
+  renderer.
+- Keep this file in lockstep with `mg.editor.dungeon.WallRenderer` (shared by the
+  dungeon and template editors) and the device renderer.

@@ -37,32 +37,35 @@ import mg.editor.dungeon.Dungeon.Kind;
 import mg.editor.dungeon.Dungeon.Level;
 import mg.editor.dungeon.Dungeon.Material;
 import mg.editor.dungeon.Dungeon.MonsterPlacement;
+import mg.editor.dungeon.Template;
+import mg.editor.dungeon.WallRenderer;
 import mg.editor.monster.Monster;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 
 /**
- * A grid map editor for .dungeon files built on a simple occupancy model: paint
- * micro cells with palette materials (floor = open, wall = occupied) and the wall
- * surface is <em>inferred</em> by a per-cell marching-squares/metaball pass — each
- * wall cell rounds its convex corners by its material weight (stone sharp, dirt
- * smooth), stitching across the macro grid automatically. The inferred boundary
- * is drawn as a purple dotted line for coordination with the C ray caster (see
- * {@code documents/DUNGEON_WALLS.md}). Player movement is on the macro grid
- * (5&times;5 micro cells); ladders/holes/portals anchor to macro centers and
- * individual monsters (from the project's .monster files) sit on micro cells.
+ * Grid map editor for .dungeon files. Paint micro cells with palette materials
+ * (floor = open, wall = occupied); walls are inferred by {@link WallRenderer}'s
+ * dual-grid marching squares (diagonals included) and drawn with a purple dotted
+ * boundary. Painting supports a brush (shape + size) and a line tool with a live
+ * preview, plus stampable {@link Template}s (built-ins + project {@code .template}
+ * files) previewed under the cursor. Ladders/holes/portals send the party to a
+ * named {@code TARGET} (any macro cell) by id, not coordinates. See
+ * {@code documents/DUNGEON_WALLS.md}.
  */
 public class DungeonEditor implements Editor {
 
   private static final int MACRO = Dungeon.MACRO;
-  private static final Color ROCK = Color.web("#5a5a5a"); // out-of-bounds / unknown wall
+  private static final Color ROCK = Color.web("#5a5a5a");
   private static final Color PURPLE = Color.web("#9c27b0");
 
-  private enum Tool { SELECT, PAINT, FEATURE, MONSTER, ERASE }
+  private enum Tool { SELECT, PAINT, ERASE, LINE, FEATURE, MONSTER, TEMPLATE }
 
   private final File file;
   private final Label status;
@@ -73,9 +76,23 @@ public class DungeonEditor implements Editor {
   private boolean populating;
 
   private int levelIndex = 0;
-  private int cellSize = 16;            // micro-cell pixels
+  private int cellSize = 16;
   private Tool tool = Tool.SELECT;
-  private int selX = -1, selY = -1;     // selected micro cell
+  private int selX = -1, selY = -1;
+
+  // brush / line
+  private final ComboBox<String> brushShape = new ComboBox<>();
+  private final Spinner<Integer> brushSize = new Spinner<>(1, 9, 1);
+  private final Spinner<Integer> lineWidth = new Spinner<>(1, 9, 1);
+
+  // line preview
+  private boolean lineActive;
+  private int lx0, ly0, lx1, ly1;
+
+  // template preview
+  private final ComboBox<Template> templatePick = new ComboBox<>();
+  private boolean hovering;
+  private int hoverX, hoverY;
 
   // palette
   private final ListView<Material> paletteList = new ListView<>();
@@ -83,11 +100,8 @@ public class DungeonEditor implements Editor {
   // placement pickers
   private final ComboBox<FeatureType> featurePick = new ComboBox<>();
   private final ComboBox<String> monsterPick = new ComboBox<>();
-
-  // available monsters discovered from the project (id -> size)
   private final Map<String, Integer> monsterSizes = new TreeMap<>();
 
-  // level + inspector
   private final ComboBox<String> levelPick = new ComboBox<>();
   private final VBox propsBox = new VBox(6);
 
@@ -111,19 +125,28 @@ public class DungeonEditor implements Editor {
   private Node buildToolPanel() {
     VBox box = new VBox(8);
     box.setPadding(new Insets(10));
-    box.setPrefWidth(240);
+    box.setPrefWidth(250);
 
     ToggleGroup tg = new ToggleGroup();
     box.getChildren().add(section("Tools"));
     box.getChildren().add(toolButton(tg, Tool.SELECT, "Select / Inspect"));
     box.getChildren().add(toolButton(tg, Tool.PAINT, "Paint material"));
     box.getChildren().add(toolButton(tg, Tool.ERASE, "Erase → solid"));
+    box.getChildren().add(toolButton(tg, Tool.LINE, "Line (drag, preview)"));
+    box.getChildren().add(toolButton(tg, Tool.TEMPLATE, "Stamp template"));
     box.getChildren().add(toolButton(tg, Tool.FEATURE, "Place feature (macro)"));
     box.getChildren().add(toolButton(tg, Tool.MONSTER, "Place monster (micro)"));
 
+    brushShape.getItems().setAll("square", "circle", "diamond");
+    brushShape.getSelectionModel().selectFirst();
+    box.getChildren().add(new HBox(8,
+        new VBox(2, new Label("brush"), brushShape),
+        new VBox(2, new Label("size"), brushSize),
+        new VBox(2, new Label("line w"), lineWidth)));
+
     box.getChildren().add(section("Palette  (floor = open, wall = solid)"));
     paletteList.getItems().setAll(dungeon.palette);
-    paletteList.setPrefHeight(170);
+    paletteList.setPrefHeight(150);
     paletteList.setCellFactory(lv -> new ListCell<>() {
       @Override protected void updateItem(Material m, boolean empty) {
         super.updateItem(m, empty);
@@ -142,7 +165,6 @@ public class DungeonEditor implements Editor {
     paletteList.getSelectionModel().selectedItemProperty().addListener((o, a, b) -> populateMaterialForm(b));
     paletteList.getSelectionModel().select(dungeon.defaultFloorIndex());
     box.getChildren().add(paletteList);
-
     Button addMat = new Button("Add");
     addMat.setOnAction(e -> addMaterial());
     Button delMat = new Button("Remove");
@@ -155,9 +177,16 @@ public class DungeonEditor implements Editor {
     featurePick.getSelectionModel().select(FeatureType.LADDER_DOWN);
     box.getChildren().add(labeled("Feature type", featurePick));
     refreshMonsterPick();
-    Button rescan = new Button("Rescan monsters");
-    rescan.setOnAction(e -> { discoverMonsters(); refreshMonsterPick(); redraw(); });
     box.getChildren().add(labeled("Monster", monsterPick));
+    discoverTemplates();
+    templatePick.setCellFactory(lv -> templateCell());
+    templatePick.setButtonCell(templateCell());
+    if (!templatePick.getItems().isEmpty()) {
+      templatePick.getSelectionModel().selectFirst();
+    }
+    box.getChildren().add(labeled("Template", templatePick));
+    Button rescan = new Button("Rescan project");
+    rescan.setOnAction(e -> { discoverMonsters(); refreshMonsterPick(); discoverTemplates(); redraw(); });
     box.getChildren().add(rescan);
 
     ScrollPane sp = new ScrollPane(box);
@@ -165,7 +194,7 @@ public class DungeonEditor implements Editor {
     return sp;
   }
 
-  // material editor fields (bound to the selected palette entry)
+  // material editor fields
   private final TextField matName = new TextField();
   private final TextField matColor = new TextField();
   private final ComboBox<Kind> matKind = new ComboBox<>();
@@ -173,7 +202,6 @@ public class DungeonEditor implements Editor {
 
   private Node buildMaterialForm() {
     matKind.getItems().setAll(Kind.values());
-    matWeight.setShowTickLabels(false);
     matWeight.setMajorTickUnit(25);
     Runnable commit = () -> {
       Material m = paletteList.getSelectionModel().getSelectedItem();
@@ -224,6 +252,8 @@ public class DungeonEditor implements Editor {
     b.setOnAction(e -> {
       if (b.isSelected()) {
         tool = t;
+        lineActive = false;
+        redraw();
       } else {
         b.setSelected(true);
       }
@@ -232,20 +262,16 @@ public class DungeonEditor implements Editor {
   }
 
   private Node buildCanvasPane() {
-    canvas.setOnMousePressed(e -> handlePaint(e.getX(), e.getY()));
-    canvas.setOnMouseDragged(e -> {
-      if (tool == Tool.PAINT || tool == Tool.ERASE) {
-        handlePaint(e.getX(), e.getY());
-      }
-    });
+    canvas.setOnMouseMoved(e -> onMove(e.getX(), e.getY()));
+    canvas.setOnMousePressed(e -> onPress(e.getX(), e.getY()));
+    canvas.setOnMouseDragged(e -> onDrag(e.getX(), e.getY()));
+    canvas.setOnMouseReleased(e -> onRelease());
+    canvas.setOnMouseExited(e -> { if (hovering) { hovering = false; redraw(); } });
     ScrollPane sp = new ScrollPane(canvas);
 
     Slider zoom = new Slider(8, 30, cellSize);
     zoom.setPrefWidth(140);
-    zoom.valueProperty().addListener((o, was, now) -> {
-      cellSize = now.intValue();
-      redraw();
-    });
+    zoom.valueProperty().addListener((o, was, now) -> { cellSize = now.intValue(); redraw(); });
 
     levelPick.setOnAction(e -> {
       int idx = levelPick.getSelectionModel().getSelectedIndex();
@@ -288,20 +314,60 @@ public class DungeonEditor implements Editor {
     return box;
   }
 
-  // ------------------------------------------------------------- monster scan
+  // ------------------------------------------------------------- project scan
 
   private void discoverMonsters() {
     monsterSizes.clear();
-    File scanRoot = ProjectSettings.root();
-    if (scanRoot == null) {
-      scanRoot = file.getParentFile();
-    }
+    File scanRoot = scanRoot();
     if (scanRoot != null) {
-      collectMonsters(scanRoot);
+      collect(scanRoot, ".monster", f -> {
+        try {
+          Monster m = Monster.load(f);
+          if (m.id != null && !m.id.isBlank()) {
+            monsterSizes.put(m.id, Math.max(1, Math.min(5, m.size)));
+          }
+        } catch (Exception ex) {
+          Log.error("could not read monster " + f.getName(), ex);
+        }
+      });
     }
   }
 
-  private void collectMonsters(File dir) {
+  private void discoverTemplates() {
+    Template prior = templatePick.getValue();
+    List<Template> all = new ArrayList<>(Template.builtins());
+    File scanRoot = scanRoot();
+    if (scanRoot != null) {
+      collect(scanRoot, ".template", f -> {
+        try {
+          all.add(Template.load(f));
+        } catch (Exception ex) {
+          Log.error("could not read template " + f.getName(), ex);
+        }
+      });
+    }
+    templatePick.getItems().setAll(all);
+    if (prior != null) {
+      for (Template t : all) {
+        if (t.name.equals(prior.name)) {
+          templatePick.setValue(t);
+          return;
+        }
+      }
+    }
+    if (!all.isEmpty()) {
+      templatePick.getSelectionModel().selectFirst();
+    }
+  }
+
+  private File scanRoot() {
+    File r = ProjectSettings.root();
+    return r != null ? r : file.getParentFile();
+  }
+
+  private interface FileSink { void accept(File f); }
+
+  private void collect(File dir, String ext, FileSink sink) {
     File[] kids = dir.listFiles();
     if (kids == null) {
       return;
@@ -311,16 +377,9 @@ public class DungeonEditor implements Editor {
         continue;
       }
       if (k.isDirectory()) {
-        collectMonsters(k);
-      } else if (k.getName().toLowerCase().endsWith(".monster")) {
-        try {
-          Monster m = Monster.load(k);
-          if (m.id != null && !m.id.isBlank()) {
-            monsterSizes.put(m.id, Math.max(1, Math.min(5, m.size)));
-          }
-        } catch (Exception ex) {
-          Log.error("could not read monster " + k.getName(), ex);
-        }
+        collect(k, ext, sink);
+      } else if (k.getName().toLowerCase().endsWith(ext)) {
+        sink.accept(k);
       }
     }
   }
@@ -335,25 +394,73 @@ public class DungeonEditor implements Editor {
     }
   }
 
-  // ------------------------------------------------------------- cell painting
+  private ListCell<Template> templateCell() {
+    return new ListCell<>() {
+      @Override protected void updateItem(Template t, boolean empty) {
+        super.updateItem(t, empty);
+        setText(empty || t == null ? null : t.name + " (" + t.width + "×" + t.height + ")");
+      }
+    };
+  }
 
-  private void handlePaint(double px, double py) {
+  // ------------------------------------------------------------- mouse / paint
+
+  private void onMove(double px, double py) {
+    if (tool == Tool.TEMPLATE) {
+      hoverX = (int) (px / cellSize);
+      hoverY = (int) (py / cellSize);
+      hovering = true;
+      redraw();
+    }
+  }
+
+  private void onPress(double px, double py) {
     Level lv = level();
-    int x = (int) (px / cellSize);
-    int y = (int) (py / cellSize);
+    int x = (int) (px / cellSize), y = (int) (py / cellSize);
     if (!lv.inBounds(x, y)) {
       return;
     }
     switch (tool) {
-      case SELECT -> { selX = x; selY = y; rebuildProps(); redraw(); return; }
-      case PAINT -> {
-        int idx = paletteList.getSelectionModel().getSelectedIndex();
-        lv.cells[x][y] = idx < 0 ? dungeon.defaultFloorIndex() : idx;
-      }
-      case ERASE -> lv.cells[x][y] = dungeon.defaultWallIndex();
-      case FEATURE -> placeFeature(lv, x / MACRO, y / MACRO);
-      case MONSTER -> placeMonster(lv, x, y);
+      case SELECT -> { selX = x; selY = y; rebuildProps(); redraw(); }
+      case PAINT -> { brush(lv, x, y, selectedIndex(), brushShape.getValue(), brushSize.getValue()); afterEdit(x, y); }
+      case ERASE -> { brush(lv, x, y, dungeon.defaultWallIndex(), brushShape.getValue(), brushSize.getValue()); afterEdit(x, y); }
+      case LINE -> { lineActive = true; lx0 = lx1 = x; ly0 = ly1 = y; redraw(); }
+      case FEATURE -> { placeFeature(lv, x / MACRO, y / MACRO); afterEdit(x, y); }
+      case MONSTER -> { placeMonster(lv, x, y); afterEdit(x, y); }
+      case TEMPLATE -> { stampTemplate(lv, x, y); afterEdit(x, y); }
     }
+  }
+
+  private void onDrag(double px, double py) {
+    Level lv = level();
+    int x = (int) (px / cellSize), y = (int) (py / cellSize);
+    if (tool == Tool.PAINT && lv.inBounds(x, y)) {
+      brush(lv, x, y, selectedIndex(), brushShape.getValue(), brushSize.getValue());
+      afterEdit(x, y);
+    } else if (tool == Tool.ERASE && lv.inBounds(x, y)) {
+      brush(lv, x, y, dungeon.defaultWallIndex(), brushShape.getValue(), brushSize.getValue());
+      afterEdit(x, y);
+    } else if (tool == Tool.LINE && lineActive) {
+      lx1 = clampX(x);
+      ly1 = clampY(y);
+      redraw();
+    }
+  }
+
+  private void onRelease() {
+    if (tool == Tool.LINE && lineActive) {
+      Level lv = level();
+      for (int[] p : linePoints(lx0, ly0, lx1, ly1)) {
+        brush(lv, p[0], p[1], selectedIndex(), "square", lineWidth.getValue());
+      }
+      lineActive = false;
+      markDirty();
+      rebuildProps();
+      redraw();
+    }
+  }
+
+  private void afterEdit(int x, int y) {
     selX = x;
     selY = y;
     markDirty();
@@ -361,12 +468,64 @@ public class DungeonEditor implements Editor {
     redraw();
   }
 
+  private int selectedIndex() {
+    int i = paletteList.getSelectionModel().getSelectedIndex();
+    return i < 0 ? dungeon.defaultFloorIndex() : i;
+  }
+
+  private int selectedWallIndex() {
+    Material m = paletteList.getSelectionModel().getSelectedItem();
+    return (m != null && m.isWall()) ? dungeon.palette.indexOf(m) : dungeon.defaultWallIndex();
+  }
+
+  private int selectedFloorIndex() {
+    Material m = paletteList.getSelectionModel().getSelectedItem();
+    return (m != null && !m.isWall()) ? dungeon.palette.indexOf(m) : dungeon.defaultFloorIndex();
+  }
+
+  /** stamp a brush of {@code shape}/{@code size} (cells) of {@code idx} centred on (cx,cy). */
+  private void brush(Level lv, int cx, int cy, int idx, String shape, int size) {
+    int r = size / 2;
+    for (int dx = -r; dx <= r; dx++) {
+      for (int dy = -r; dy <= r; dy++) {
+        if (TemplateEditor.inBrush(dx, dy, r, shape) && lv.inBounds(cx + dx, cy + dy)) {
+          lv.cells[cx + dx][cy + dy] = idx;
+        }
+      }
+    }
+  }
+
+  private int clampX(int x) {
+    return Math.max(0, Math.min(level().width - 1, x));
+  }
+
+  private int clampY(int y) {
+    return Math.max(0, Math.min(level().height - 1, y));
+  }
+
+  /** Bresenham cell line. */
+  private static List<int[]> linePoints(int x0, int y0, int x1, int y1) {
+    List<int[]> out = new ArrayList<>();
+    int dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0);
+    int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, err = dx + dy;
+    while (true) {
+      out.add(new int[] {x0, y0});
+      if (x0 == x1 && y0 == y1) {
+        break;
+      }
+      int e2 = 2 * err;
+      if (e2 >= dy) { err += dy; x0 += sx; }
+      if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+    return out;
+  }
+
   private void placeFeature(Level lv, int mx, int my) {
     FeatureType type = featurePick.getValue();
     Feature existing = featureAt(lv, mx, my);
     if (existing != null) {
       if (existing.type == type) {
-        lv.features.remove(existing); // toggle off
+        lv.features.remove(existing);
       } else {
         existing.type = type;
       }
@@ -386,7 +545,7 @@ public class DungeonEditor implements Editor {
     }
     for (MonsterPlacement mp : lv.monsters) {
       if (mp.x == x && mp.y == y && mp.monsterId.equals(id)) {
-        return; // already there
+        return;
       }
     }
     MonsterPlacement mp = new MonsterPlacement();
@@ -394,6 +553,27 @@ public class DungeonEditor implements Editor {
     mp.x = x;
     mp.y = y;
     lv.monsters.add(mp);
+  }
+
+  private void stampTemplate(Level lv, int cx, int cy) {
+    Template t = templatePick.getValue();
+    if (t == null) {
+      return;
+    }
+    int ox = cx - t.width / 2, oy = cy - t.height / 2;
+    int wIdx = selectedWallIndex(), fIdx = selectedFloorIndex();
+    for (int tx = 0; tx < t.width; tx++) {
+      for (int ty = 0; ty < t.height; ty++) {
+        byte v = t.cells[tx][ty];
+        if (v == Template.SKIP) {
+          continue;
+        }
+        int x = ox + tx, y = oy + ty;
+        if (lv.inBounds(x, y)) {
+          lv.cells[x][y] = (v == Template.WALL) ? wIdx : fIdx;
+        }
+      }
+    }
   }
 
   private Feature featureAt(Level lv, int mx, int my) {
@@ -419,7 +599,6 @@ public class DungeonEditor implements Editor {
     int mx = selX / MACRO, my = selY / MACRO;
     propsBox.getChildren().add(new Label("Micro " + selX + "," + selY + "   ·   Macro " + mx + "," + my));
 
-    // cell material
     ComboBox<Material> mat = new ComboBox<>();
     mat.getItems().setAll(dungeon.palette);
     mat.setButtonCell(materialCell());
@@ -434,7 +613,6 @@ public class DungeonEditor implements Editor {
     });
     propsBox.getChildren().add(labeled("Cell material", mat));
 
-    // feature for this macro cell
     propsBox.getChildren().add(section("Feature (macro " + mx + "," + my + ")"));
     Feature f = featureAt(lv, mx, my);
     ComboBox<String> ftype = new ComboBox<>();
@@ -468,20 +646,24 @@ public class DungeonEditor implements Editor {
     propsBox.getChildren().add(labeled("Type", ftype));
 
     if (f != null) {
-      Spinner<Integer> tl = new Spinner<>(-1, 99, f.targetLevel);
-      Spinner<Integer> tmx = new Spinner<>(-1, 999, f.targetMX);
-      Spinner<Integer> tmy = new Spinner<>(-1, 999, f.targetMY);
-      tl.valueProperty().addListener((o, a, b) -> { if (!populating) { f.targetLevel = b; markDirty(); } });
-      tmx.valueProperty().addListener((o, a, b) -> { if (!populating) { f.targetMX = b; markDirty(); } });
-      tmy.valueProperty().addListener((o, a, b) -> { if (!populating) { f.targetMY = b; markDirty(); } });
+      if (f.type == FeatureType.TARGET) {
+        TextField id = new TextField(f.id);
+        id.setPromptText("destination id, e.g. crypt-entry");
+        id.textProperty().addListener((o, a, b) -> { if (!populating) { f.id = b; markDirty(); redraw(); } });
+        propsBox.getChildren().add(labeled("Target id", id));
+      } else {
+        ComboBox<String> dest = new ComboBox<>();
+        dest.setEditable(true);
+        dest.getItems().setAll(allTargetIds());
+        dest.setValue(f.dest);
+        dest.valueProperty().addListener((o, a, b) -> { if (!populating) { f.dest = b == null ? "" : b; markDirty(); } });
+        propsBox.getChildren().add(labeled("Destination (target id)", dest));
+      }
       TextField note = new TextField(f.note);
       note.textProperty().addListener((o, a, b) -> { if (!populating) { f.note = b; markDirty(); } });
-      propsBox.getChildren().addAll(
-          new Label("target (level / macroX / macroY):"),
-          new HBox(6, tl, tmx, tmy), labeled("note", note));
+      propsBox.getChildren().add(labeled("note", note));
     }
 
-    // monsters on this micro cell
     propsBox.getChildren().add(section("Monsters here"));
     boolean any = false;
     for (MonsterPlacement mp : new ArrayList<>(lv.monsters)) {
@@ -505,6 +687,11 @@ public class DungeonEditor implements Editor {
     populating = false;
   }
 
+  private List<String> allTargetIds() {
+    Set<String> ids = new LinkedHashSet<>(dungeon.targetIds());
+    return new ArrayList<>(ids);
+  }
+
   private ListCell<Material> materialCell() {
     return new ListCell<>() {
       @Override protected void updateItem(Material m, boolean empty) {
@@ -525,7 +712,6 @@ public class DungeonEditor implements Editor {
     GraphicsContext g = canvas.getGraphicsContext2D();
     g.clearRect(0, 0, w, h);
 
-    // base + open floors
     g.setFill(matColor(dungeon.material(dungeon.defaultFloorIndex())));
     g.fillRect(0, 0, w, h);
     for (int x = 0; x < lv.width; x++) {
@@ -536,32 +722,22 @@ public class DungeonEditor implements Editor {
         }
       }
     }
-    // smooth wall blobs (rounded by weight)
-    for (int x = 0; x < lv.width; x++) {
-      for (int y = 0; y < lv.height; y++) {
-        if (dungeon.isWall(lv.cells[x][y])) {
-          drawWallBlob(g, lv, x, y);
-        }
-      }
-    }
+
+    WallRenderer.Cells cells = levelCells(lv);
+    WallRenderer.fill(g, lv.width, lv.height, cellSize, cells);
+
     drawGrids(g, lv);
-    // purple dotted inferred boundary
+
     g.setStroke(PURPLE);
     g.setLineWidth(1.4);
     g.setLineDashes(2, 3);
-    for (int x = 0; x < lv.width; x++) {
-      for (int y = 0; y < lv.height; y++) {
-        if (dungeon.isWall(lv.cells[x][y])) {
-          drawBoundary(g, lv, x, y);
-        }
-      }
-    }
+    WallRenderer.boundary(g, lv.width, lv.height, cellSize, cells);
     g.setLineDashes();
 
     drawFeatures(g, lv);
     drawMonsters(g, lv);
+    drawGhost(g, lv);
 
-    // selection
     if (lv.inBounds(selX, selY)) {
       g.setStroke(Color.DODGERBLUE);
       g.setLineWidth(2);
@@ -572,92 +748,73 @@ public class DungeonEditor implements Editor {
         + (dirty ? " *" : ""));
   }
 
-  /** convex-corner rounding radius for a wall material's weight (sharp→0, smooth→s/2). */
-  private double radius(int matIdx) {
-    Material m = dungeon.material(matIdx);
-    int weight = m == null ? 100 : m.weight;
-    return (1.0 - weight / 100.0) * (cellSize * 0.5);
+  private WallRenderer.Cells levelCells(Level lv) {
+    return new WallRenderer.Cells() {
+      @Override public boolean occupied(int x, int y) {
+        return dungeon.occupied(lv, x, y); // out-of-bounds = solid rock
+      }
+      @Override public Color color(int x, int y) {
+        return lv.inBounds(x, y) ? matColor(dungeon.material(lv.cells[x][y])) : ROCK;
+      }
+      @Override public int weight(int x, int y) {
+        if (!lv.inBounds(x, y)) {
+          return 100;
+        }
+        Material m = dungeon.material(lv.cells[x][y]);
+        return m == null ? 100 : m.weight;
+      }
+    };
   }
 
-  /**
-   * Fill one wall micro cell as a rounded blob: each corner is rounded only when
-   * both of its edge-neighbours are open (a convex outer corner), by the cell's
-   * weight radius. Uses only the 4 edge neighbours, so it is computable in
-   * isolation and stitches seamlessly across macro boundaries.
-   */
-  private void drawWallBlob(GraphicsContext g, Level lv, int x, int y) {
-    double px = x * cellSize, py = y * cellSize, s = cellSize;
-    double r = Math.min(radius(lv.cells[x][y]), s / 2);
-    boolean openN = !dungeon.occupied(lv, x, y - 1);
-    boolean openS = !dungeon.occupied(lv, x, y + 1);
-    boolean openE = !dungeon.occupied(lv, x + 1, y);
-    boolean openW = !dungeon.occupied(lv, x - 1, y);
-    boolean cTL = openN && openW;
-    boolean cTR = openN && openE;
-    boolean cBR = openS && openE;
-    boolean cBL = openS && openW;
-
-    g.setFill(matColor(dungeon.material(lv.cells[x][y])));
-    g.beginPath();
-    g.moveTo(px + (cTL ? r : 0), py);
-    // top edge → TR
-    if (cTR) { g.lineTo(px + s - r, py); g.quadraticCurveTo(px + s, py, px + s, py + r); }
-    else { g.lineTo(px + s, py); }
-    // right edge → BR
-    if (cBR) { g.lineTo(px + s, py + s - r); g.quadraticCurveTo(px + s, py + s, px + s - r, py + s); }
-    else { g.lineTo(px + s, py + s); }
-    // bottom edge → BL
-    if (cBL) { g.lineTo(px + r, py + s); g.quadraticCurveTo(px, py + s, px, py + s - r); }
-    else { g.lineTo(px, py + s); }
-    // left edge → TL
-    if (cTL) { g.lineTo(px, py + r); g.quadraticCurveTo(px, py, px + (r), py); }
-    else { g.lineTo(px, py); }
-    g.closePath();
-    g.fill();
-  }
-
-  /** draw the purple boundary for a wall cell: every side facing an open cell, with rounded convex corners. */
-  private void drawBoundary(GraphicsContext g, Level lv, int x, int y) {
-    double px = x * cellSize, py = y * cellSize, s = cellSize;
-    double r = Math.min(radius(lv.cells[x][y]), s / 2);
-    boolean openN = !dungeon.occupied(lv, x, y - 1);
-    boolean openS = !dungeon.occupied(lv, x, y + 1);
-    boolean openE = !dungeon.occupied(lv, x + 1, y);
-    boolean openW = !dungeon.occupied(lv, x - 1, y);
-    boolean cTL = openN && openW, cTR = openN && openE, cBR = openS && openE, cBL = openS && openW;
-    if (openN) {
-      line(g, px + (cTL ? r : 0), py, px + s - (cTR ? r : 0), py);
+  private void drawGhost(GraphicsContext g, Level lv) {
+    if (tool == Tool.LINE && lineActive) {
+      Color c = matColor(paletteList.getSelectionModel().getSelectedItem());
+      g.setFill(Color.color(c.getRed(), c.getGreen(), c.getBlue(), 0.5));
+      Set<Long> seen = new LinkedHashSet<>();
+      for (int[] p : linePoints(lx0, ly0, lx1, ly1)) {
+        int r = lineWidth.getValue() / 2;
+        for (int dx = -r; dx <= r; dx++) {
+          for (int dy = -r; dy <= r; dy++) {
+            int x = p[0] + dx, y = p[1] + dy;
+            if (lv.inBounds(x, y) && seen.add(((long) x << 20) | y)) {
+              g.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+            }
+          }
+        }
+      }
+    } else if (tool == Tool.TEMPLATE && hovering) {
+      Template t = templatePick.getValue();
+      if (t == null) {
+        return;
+      }
+      int ox = hoverX - t.width / 2, oy = hoverY - t.height / 2;
+      Color wc = matColor(dungeon.material(selectedWallIndex()));
+      Color fc = matColor(dungeon.material(selectedFloorIndex()));
+      for (int tx = 0; tx < t.width; tx++) {
+        for (int ty = 0; ty < t.height; ty++) {
+          byte v = t.cells[tx][ty];
+          if (v == Template.SKIP) {
+            continue;
+          }
+          int x = ox + tx, y = oy + ty;
+          if (!lv.inBounds(x, y)) {
+            continue;
+          }
+          Color c = v == Template.WALL ? wc : fc;
+          g.setFill(Color.color(c.getRed(), c.getGreen(), c.getBlue(), 0.55));
+          g.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+        }
+      }
+      g.setStroke(Color.color(0.61, 0.15, 0.69, 0.9));
+      g.setLineWidth(1.5);
+      g.strokeRect(Math.max(0, ox) * cellSize, Math.max(0, oy) * cellSize,
+          t.width * cellSize, t.height * cellSize);
     }
-    if (openE) {
-      line(g, px + s, py + (cTR ? r : 0), px + s, py + s - (cBR ? r : 0));
-    }
-    if (openS) {
-      line(g, px + (cBL ? r : 0), py + s, px + s - (cBR ? r : 0), py + s);
-    }
-    if (openW) {
-      line(g, px, py + (cTL ? r : 0), px, py + s - (cBL ? r : 0));
-    }
-    if (cTL) { arc(g, px, py + r, px, py, px + r, py); }
-    if (cTR) { arc(g, px + s - r, py, px + s, py, px + s, py + r); }
-    if (cBR) { arc(g, px + s, py + s - r, px + s, py + s, px + s - r, py + s); }
-    if (cBL) { arc(g, px + r, py + s, px, py + s, px, py + s - r); }
-  }
-
-  private static void line(GraphicsContext g, double x1, double y1, double x2, double y2) {
-    g.strokeLine(x1, y1, x2, y2);
-  }
-
-  private static void arc(GraphicsContext g, double x0, double y0, double cx, double cy, double x1, double y1) {
-    g.beginPath();
-    g.moveTo(x0, y0);
-    g.quadraticCurveTo(cx, cy, x1, y1);
-    g.stroke();
   }
 
   private void drawGrids(GraphicsContext g, Level lv) {
     double w = lv.width * (double) cellSize, h = lv.height * (double) cellSize;
     g.setLineDashes();
-    // micro grid — thin
     g.setStroke(Color.rgb(0, 0, 0, 0.12));
     g.setLineWidth(1);
     for (int x = 0; x <= lv.width; x++) {
@@ -666,7 +823,6 @@ public class DungeonEditor implements Editor {
     for (int y = 0; y <= lv.height; y++) {
       g.strokeLine(0, y * cellSize + 0.5, w, y * cellSize + 0.5);
     }
-    // macro grid — thick
     g.setStroke(Color.rgb(0, 0, 0, 0.55));
     g.setLineWidth(2.5);
     for (int x = 0; x <= lv.macroW(); x++) {
@@ -679,15 +835,20 @@ public class DungeonEditor implements Editor {
 
   private void drawFeatures(GraphicsContext g, Level lv) {
     g.setTextAlign(TextAlignment.CENTER);
-    g.setFont(Font.font(Math.max(10, MACRO * cellSize * 0.35)));
+    g.setFont(Font.font(Math.max(10, MACRO * cellSize * 0.32)));
     for (Feature f : lv.features) {
       double cx = (f.mx * MACRO + MACRO / 2.0) * cellSize;
       double cy = (f.my * MACRO + MACRO / 2.0) * cellSize;
       double rr = cellSize * 1.4;
       g.setFill(Color.rgb(0, 0, 0, 0.55));
       g.fillOval(cx - rr, cy - rr, rr * 2, rr * 2);
-      g.setFill(Color.web("#ffd54f"));
-      g.fillText(featureGlyph(f.type), cx, cy + cellSize * 0.5);
+      g.setFill(f.type == FeatureType.TARGET ? Color.web("#80deea") : Color.web("#ffd54f"));
+      g.fillText(featureGlyph(f.type), cx, cy + cellSize * 0.45);
+      if (f.type == FeatureType.TARGET && !f.id.isEmpty()) {
+        g.setFont(Font.font(Math.max(8, cellSize * 0.6)));
+        g.fillText(f.id, cx, cy + rr + cellSize * 0.6);
+        g.setFont(Font.font(Math.max(10, MACRO * cellSize * 0.32)));
+      }
     }
   }
 
@@ -697,6 +858,7 @@ public class DungeonEditor implements Editor {
       case LADDER_DOWN -> "▼";
       case HOLE -> "◍";
       case PORTAL -> "◈";
+      case TARGET -> "⌖";
     };
   }
 
@@ -773,9 +935,9 @@ public class DungeonEditor implements Editor {
       try {
         String[] parts = v.toLowerCase().split("x");
         int w = Integer.parseInt(parts[0].strip());
-        int h = Integer.parseInt(parts[1].strip());
-        if (w > 0 && h > 0 && w <= 400 && h <= 400) {
-          level().resize(w, h, dungeon.defaultWallIndex());
+        int hh = Integer.parseInt(parts[1].strip());
+        if (w > 0 && hh > 0 && w <= 400 && hh <= 400) {
+          level().resize(w, hh, dungeon.defaultWallIndex());
           markDirty();
           redraw();
         }
@@ -825,7 +987,6 @@ public class DungeonEditor implements Editor {
       return;
     }
     dungeon.palette.remove(removed);
-    // keep painted cells consistent: shift higher indices down, drop references to the removed one
     int fallback = dungeon.defaultWallIndex();
     for (Level lv : dungeon.levels) {
       for (int x = 0; x < lv.width; x++) {
@@ -884,25 +1045,21 @@ public class DungeonEditor implements Editor {
 
   // -------------------------------------------------------------------- Editor
 
-  @Override
-  public Node getNode() {
+  @Override public Node getNode() {
     return root;
   }
 
-  @Override
-  public void save() throws Exception {
+  @Override public void save() throws Exception {
     dungeon.save(file);
     dirty = false;
     redraw();
   }
 
-  @Override
-  public boolean isDirty() {
+  @Override public boolean isDirty() {
     return dirty;
   }
 
-  @Override
-  public String title() {
+  @Override public String title() {
     return "dungeon";
   }
 }
