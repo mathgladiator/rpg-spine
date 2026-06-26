@@ -1,11 +1,31 @@
 dungeon name="Proving Grounds"
-floors stone,dirt,water,lava,grass,wood,sand,ice,void
-walls stone,brick,wood,rune,ice,bone,moss
-monster id=kobold name=Kobold hp=8 ac=6 atk=3 xp=10 sprite=""
-monster id=skeleton name=Skeleton hp=12 ac=7 atk=5 xp=20 sprite=""
-group id=undead members=skeleton:1-3,kobold:0-2
-level index=0 width=8 height=8 name="Entry Level" dark=false
-cell 1,1 state=open floor=stone wall=brick edges=#..# dark=false special=none note=start
-cell 2,1 state=open floor=stone wall=brick edges=#... dark=false special=none
-cell 3,1 state=open floor=stone wall=brick edges=#.#D dark=false special=none enc=undead encpct=25
-cell 5,5 state=ladder_down floor=wood wall=stone edges=.... dark=false special=stairs tgt=1:5,5
+mat name=stone color="#7d7d7d" kind=wall weight=100
+mat name=brick color="#8a5a3b" kind=wall weight=80
+mat name=dirt color="#6b4f3a" kind=wall weight=0
+mat name=ice color="#bfe3ef" kind=wall weight=55
+mat name=floor color="#c2a86a" kind=floor weight=0
+mat name=grass color="#5b8c46" kind=floor weight=0
+mat name=water color="#3f6fb0" kind=floor weight=0
+mat name=lava color="#c0392b" kind=floor weight=0
+level index=0 name="Entry Level" width=20 height=20
+row y=0 cells=00000000000000000000
+row y=1 cells=00000000000000000000
+row y=2 cells=00000000000000000000
+row y=3 cells=00000000000000000000
+row y=4 cells=00000000000000000000
+row y=5 cells=00002222222000000000
+row y=6 cells=00002244422000000000
+row y=7 cells=00022442442000000000
+row y=8 cells=00022422240000000000
+row y=9 cells=00022444440000000000
+row y=10 cells=00000444440000000000
+row y=11 cells=00000440040444000000
+row y=12 cells=00000440000404020000
+row y=13 cells=00000244000404000000
+row y=14 cells=00000224000444000000
+row y=15 cells=00000000000000000000
+row y=16 cells=00000000000000000000
+row y=17 cells=00000000000000000000
+row y=18 cells=00000000000000000000
+row y=19 cells=00000000000000000000
+mon id=goblin x=7 y=17

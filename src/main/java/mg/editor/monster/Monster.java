@@ -60,6 +60,8 @@ public class Monster {
   public String id = "monster";
   public String name = "Monster";
   public String family = "";
+  /** footprint in the dungeon's 3D map, in micro cells (1..5); 5 fills a macro cell. */
+  public int size = 1;
 
   public final List<String> references = new ArrayList<>();
 
@@ -169,6 +171,7 @@ public class Monster {
     if (!family.isEmpty()) {
       sb.append(" family=").append(KV.q(family));
     }
+    sb.append(" size=").append(size);
     sb.append('\n');
     for (String ref : references) {
       sb.append("ref path=").append(KV.q(ref)).append('\n');
@@ -248,6 +251,7 @@ public class Monster {
           m.id = kv.get("id", "monster");
           m.name = kv.get("name", m.id);
           m.family = kv.get("family", "");
+          m.size = Math.max(1, Math.min(5, kv.getInt("size", 1)));
         }
         case "ref" -> {
           String p = kv.get("path", "");

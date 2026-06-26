@@ -1,5 +1,6 @@
 package mg.editor;
 
+import mg.editor.dungeon.Dungeon;
 import mg.editor.item.Item;
 import mg.editor.monster.Monster;
 import mg.editor.world.World;
@@ -29,10 +30,14 @@ public final class AssetAudit {
   /** a referenced image that is missing, and the document that wanted it. */
   public record Lost(File owner, String ref, File resolved) {}
 
+  /** a monster id placed in a dungeon that no .monster file defines. */
+  public record MissingMonster(File owner, String id) {}
+
   public static final class Result {
     public final List<Lost> lost = new ArrayList<>();
     public final List<File> orphans = new ArrayList<>();
-    /** canonical files that have any error (parse failure or a lost reference). */
+    public final List<MissingMonster> missingMonsters = new ArrayList<>();
+    /** canonical files that have any error (parse failure, a lost reference, or a missing monster). */
     public final Set<File> errored = new HashSet<>();
   }
 
@@ -44,6 +49,18 @@ public final class AssetAudit {
     List<File> all = new ArrayList<>();
     collect(root, all);
 
+    // first, every monster id defined by a .monster file (for dungeon placement validation)
+    Set<String> knownMonsters = new HashSet<>();
+    for (File f : all) {
+      if (f.getName().toLowerCase().endsWith(".monster")) {
+        try {
+          knownMonsters.add(Monster.load(f).id);
+        } catch (Exception ignore) {
+          // a broken .monster surfaces as an errored file below
+        }
+      }
+    }
+
     Set<File> referenced = new HashSet<>();
     for (File f : all) {
       String name = f.getName().toLowerCase();
@@ -54,6 +71,8 @@ public final class AssetAudit {
           referenceCheck(r, referenced, f, Item.load(f).imageRefs());
         } else if (name.endsWith(".world")) {
           referenceCheck(r, referenced, f, World.load(f).imageRefs());
+        } else if (name.endsWith(".dungeon")) {
+          checkDungeon(r, knownMonsters, f);
         } else if (name.endsWith(".rpg")) {
           checkRpg(r, f);
         }
@@ -81,6 +100,16 @@ public final class AssetAudit {
       if (!resolved.exists()) {
         r.lost.add(new Lost(owner, ref, resolved));
         r.errored.add(canon(owner));
+      }
+    }
+  }
+
+  private static void checkDungeon(Result r, Set<String> knownMonsters, File f) throws Exception {
+    Dungeon d = Dungeon.load(f);
+    for (String id : d.monsterIds()) {
+      if (!knownMonsters.contains(id)) {
+        r.missingMonsters.add(new MissingMonster(f, id));
+        r.errored.add(canon(f));
       }
     }
   }

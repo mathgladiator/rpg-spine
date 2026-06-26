@@ -448,7 +448,7 @@ public class EditorApp extends Application {
         ? "No project open.\n\nProject ▸ Open Folder…  to choose a content folder."
         : "Select a file on the left to edit.\n\n"
             + ".rpg     schema, validated by the spine parser\n"
-            + ".dungeon Wizardry-style grid map editor\n"
+            + ".dungeon micro/macro occupancy grid map editor\n"
             + ".world   location/path graph + scene editor\n"
             + ".monster monster art + level/skill tables\n"
             + ".item    item with type-specific properties\n"

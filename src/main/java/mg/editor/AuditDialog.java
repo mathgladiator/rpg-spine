@@ -55,18 +55,41 @@ public final class AuditDialog {
       }
     });
 
+    ListView<AssetAudit.MissingMonster> monsterList = new ListView<>();
+    monsterList.setCellFactory(v -> new javafx.scene.control.ListCell<>() {
+      @Override
+      protected void updateItem(AssetAudit.MissingMonster item, boolean empty) {
+        super.updateItem(item, empty);
+        if (empty || item == null) {
+          setText(null);
+        } else {
+          setText("✖ " + item.id() + "   (placed in " + item.owner().getName() + ")");
+          setStyle("-fx-text-fill: #c62828;");
+        }
+      }
+    });
+
     Label summary = new Label();
 
     Runnable refresh = () -> {
       AssetAudit.Result r = AssetAudit.run(root);
       lostList.getItems().setAll(r.lost);
       orphanList.getItems().setAll(r.orphans);
-      summary.setText(r.lost.size() + " lost · " + r.orphans.size() + " orphaned");
+      monsterList.getItems().setAll(r.missingMonsters);
+      summary.setText(r.lost.size() + " lost · " + r.orphans.size() + " orphaned · "
+          + r.missingMonsters.size() + " missing monsters");
     };
 
     Button openOwner = new Button("Open owner");
     openOwner.setOnAction(e -> {
       AssetAudit.Lost sel = lostList.getSelectionModel().getSelectedItem();
+      if (sel != null && openFile != null) {
+        openFile.accept(sel.owner());
+      }
+    });
+    Button openMonsterOwner = new Button("Open owner");
+    openMonsterOwner.setOnAction(e -> {
+      AssetAudit.MissingMonster sel = monsterList.getSelectionModel().getSelectedItem();
       if (sel != null && openFile != null) {
         openFile.accept(sel.owner());
       }
@@ -107,18 +130,22 @@ public final class AuditDialog {
     TitledPane orphanPane = new TitledPane("Orphaned images (on disk, unreferenced)",
         new VBox(6, orphanList, new HBox(8, deleteOrphans)));
     orphanPane.setCollapsible(false);
+    TitledPane monsterPane = new TitledPane("Missing monsters (placed in a dungeon, no .monster file)",
+        new VBox(6, monsterList, new HBox(8, openMonsterOwner)));
+    monsterPane.setCollapsible(false);
     VBox.setVgrow(lostList, Priority.ALWAYS);
     VBox.setVgrow(orphanList, Priority.ALWAYS);
+    VBox.setVgrow(monsterList, Priority.ALWAYS);
 
     HBox bottom = new HBox(8, summary, new javafx.scene.layout.Region(), rerun);
     HBox.setHgrow(bottom.getChildren().get(1), Priority.ALWAYS);
     bottom.setPadding(new Insets(8));
 
-    VBox center = new VBox(8, lostPane, orphanPane);
+    VBox center = new VBox(8, lostPane, orphanPane, monsterPane);
     center.setPadding(new Insets(8));
     BorderPane rootPane = new BorderPane(center);
     rootPane.setBottom(bottom);
-    stage.setScene(new Scene(rootPane, 640, 560));
+    stage.setScene(new Scene(rootPane, 640, 640));
     refresh.run();
     stage.show();
   }

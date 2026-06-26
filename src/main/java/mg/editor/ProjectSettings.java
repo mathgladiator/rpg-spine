@@ -19,10 +19,16 @@ public final class ProjectSettings {
   public int animCellH = 48;    // animation frame cell height, px
 
   private static ProjectSettings current = new ProjectSettings();
+  private static File rootDir;
 
   /** the settings for the currently open project (never null). */
   public static ProjectSettings current() {
     return current;
+  }
+
+  /** the open project's root folder, or null if none is open. */
+  public static File root() {
+    return rootDir;
   }
 
   private static File file(File root) {
@@ -51,6 +57,7 @@ public final class ProjectSettings {
       }
     }
     current = p;
+    rootDir = root;
     return p;
   }
 

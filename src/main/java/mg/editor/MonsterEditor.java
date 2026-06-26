@@ -15,6 +15,7 @@ import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
+import javafx.scene.control.Spinner;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.TitledPane;
@@ -88,7 +89,12 @@ public class MonsterEditor implements Editor {
     nameField.textProperty().addListener((o, a, b) -> { monster.name = b; markDirty(); status(); });
     TextField familyField = new TextField(monster.family);
     familyField.textProperty().addListener((o, a, b) -> { monster.family = b; markDirty(); });
+    Spinner<Integer> sizeField = new Spinner<>(1, 5, Math.max(1, Math.min(5, monster.size)));
+    sizeField.setPrefWidth(70);
+    sizeField.valueProperty().addListener((o, a, b) -> { monster.size = b; markDirty(); });
     id.addRow(0, new Label("id"), idField, new Label("name"), nameField, new Label("family"), familyField);
+    id.addRow(1, new Label("size"), sizeField,
+        new Label("(1–5 micro cells in the 3D map; 5 fills a macro cell)"));
     GridPane.setHgrow(nameField, Priority.ALWAYS);
     return new VBox(4, section("Monster"), id);
   }

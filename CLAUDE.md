@@ -283,6 +283,12 @@ editors and live Meshy calls have not been smoke-tested in a running app.
   per-animation header + checksum) and its single-byte RLE/detail pixel codec
   (`mg.assets.BwAnimBank` / `AnimType` / `BwCodec`). The B&W image editor shows the
   encoded size next to the PNG size in its status bar.
+- `documents/DUNGEON_WALLS.md` — the redesigned `.dungeon` model: a micro/macro
+  occupancy grid (walls implicit), the per-cell marching-squares/metaball wall
+  inference (weight = stone-sharp…dirt-smooth) the editor and C ray caster must
+  share, and the `solid(u,v)` point-in-wall test. Features (ladder/hole/portal)
+  anchor to macro centers; monsters (with a size 1–5) sit on micro cells and are
+  validated by the asset audit against project `.monster` ids.
 - `documents/AI.GEN.md` — options analysis for the image-gen backend (Meshy ≈
   Google nano-banana; PixelLab/Retro Diffusion for native sprites; FLUX/Gemini
   direct), and the recommended `ImageGen` provider abstraction.
