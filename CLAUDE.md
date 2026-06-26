@@ -302,6 +302,17 @@ editors and live Meshy calls have not been smoke-tested in a running app.
   boolean is meant to be flipped at runtime in C. A micro cell may also hold up to
   three **doodads** (`dungeon.Doodad`, `{id, dir}`); placing one infers the facing
   from the first open neighbour clockwise from north (`Dungeon.inferDir`).
+  **Doors** (`dungeon.Door`) are macro-cell gates *orthogonal* to occupancy (they
+  never repaint cells): valid only on a fully-open macro cell with exactly two
+  opposite anchor points (`Dungeon.inferDoorAxis`/`doorValid` — the editor infers
+  the `axis`), with a lock mode `unlocked`/`key`/`event` + an initial `open` bit.
+  Serialized as `door mx=… my=… axis=… lock=… [key=…|event=…] open=… [note=…]`.
+- `documents/design.dvm.md` — the **Dungeon VM**: compile a `.dungeon` into a
+  compact op-code command stream (RLE + rectangle-cover map image) plus an
+  event-driven, LISP-like script (compiled to stack bytecode) that mutates a SPINE
+  overlay (`door_open`/`region_on`/`flag`). Doors are the worked example: a static
+  `DOOR` op + an overlay bit + a desugared rule per lock mode. Design only — the
+  emitter/compiler/C interpreter are unbuilt.
 - `documents/AI.GEN.md` — options analysis for the image-gen backend (Meshy ≈
   Google nano-banana; PixelLab/Retro Diffusion for native sprites; FLUX/Gemini
   direct), and the recommended `ImageGen` provider abstraction.

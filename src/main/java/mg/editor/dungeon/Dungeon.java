@@ -147,6 +147,55 @@ public class Dungeon {
   /** the maximum number of doodads a single micro cell may hold. */
   public static final int MAX_DOODADS = 3;
 
+  /**
+   * The orientation of a door's panel — the line through its two anchor points.
+   * {@link #EW} anchors East&amp;West (panel spans horizontally) and gates N&ndash;S
+   * travel; {@link #NS} anchors North&amp;South and gates E&ndash;W travel.
+   */
+  public enum DoorAxis { NS, EW }
+
+  /** how a door is gated. */
+  public enum DoorLock {
+    /** any interaction opens it (a plain push-door). */
+    UNLOCKED,
+    /** opens only while the party carries the item named by {@link Door#key}. */
+    KEY,
+    /** opened/closed solely by the script {@link Door#event} (a lever, a boss death). */
+    EVENT
+  }
+
+  /**
+   * A door on a <b>fully-open macro cell</b>. A door is <em>orthogonal</em> to the
+   * occupancy grid — it never repaints cells; it is a movement gate at the macro
+   * center that the C engine consults independently of the inferred walls.
+   *
+   * <h3>Placement contract</h3>
+   * A door is valid only when its macro cell is entirely open floor and the cell has
+   * <b>exactly two anchor points opposite each other through the center</b>: the two
+   * macro-edge neighbours along {@link #axis} are solid rock (the jambs the panel
+   * hangs from) while the perpendicular pair are open (the corridor it gates). This
+   * is checked by {@link Dungeon#doorValid}; the editor infers {@link #axis} on
+   * placement via {@link Dungeon#inferDoorAxis} and rejects ambiguous cells (T/cross
+   * junctions, dead ends).
+   *
+   * <p>{@link #open} is the runtime initial state — a mutable overlay bit in the save
+   * document, like {@link Region#on}. {@code key}/{@code event} bind to ids resolved
+   * at codegen time (see {@code documents/design.dvm.md}).
+   */
+  public static final class Door {
+    public int mx;
+    public int my;
+    public DoorAxis axis = DoorAxis.EW;
+    public DoorLock lock = DoorLock.UNLOCKED;
+    /** required item id when {@link #lock} is {@link DoorLock#KEY}. */
+    public String key = "";
+    /** controlling script event id when {@link #lock} is {@link DoorLock#EVENT}. */
+    public String event = "";
+    /** initial open/closed state (mutable at runtime). */
+    public boolean open = false;
+    public String note = "";
+  }
+
   /** a single monster placed at micro cell (x,y); its size lives in its .monster file. */
   public static final class MonsterPlacement {
     public String monsterId = "";
@@ -165,6 +214,17 @@ public class Dungeon {
     public final List<MonsterPlacement> monsters = new ArrayList<>();
     public final List<Region> regions = new ArrayList<>();
     public final List<Doodad> doodads = new ArrayList<>();
+    public final List<Door> doors = new ArrayList<>();
+
+    /** the door on macro cell (mx,my), or null. */
+    public Door doorAt(int mx, int my) {
+      for (Door d : doors) {
+        if (d.mx == mx && d.my == my) {
+          return d;
+        }
+      }
+      return null;
+    }
 
     /** doodads sitting on micro cell (x,y). */
     public List<Doodad> doodadsAt(int x, int y) {
@@ -295,6 +355,63 @@ public class Dungeon {
     return Dir.N;
   }
 
+  /** true if every micro cell of macro cell (mx,my) is open floor (a door's chamber). */
+  public boolean macroAllOpen(Level lv, int mx, int my) {
+    for (int x = mx * MACRO; x < mx * MACRO + MACRO; x++) {
+      for (int y = my * MACRO; y < my * MACRO + MACRO; y++) {
+        if (occupied(lv, x, y)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Is the macro-edge neighbour in direction {@code d} open? Samples the cell one
+   * step past this macro cell's edge-center micro cell (so a door reads the corridor
+   * on the far side). Out of bounds reads as solid (the world's outer rock).
+   */
+  public boolean macroEdgeOpen(Level lv, int mx, int my, Dir d) {
+    int cx = mx * MACRO + MACRO / 2;
+    int cy = my * MACRO + MACRO / 2;
+    int reach = MACRO / 2 + 1; // one step past this macro's edge into the neighbour
+    int nx = cx, ny = cy;
+    switch (d) {
+      case N -> ny = cy - reach;
+      case S -> ny = cy + reach;
+      case W -> nx = cx - reach;
+      case E -> nx = cx + reach;
+    }
+    return !occupied(lv, nx, ny);
+  }
+
+  /**
+   * The door axis a fully-open macro cell can host, or null if none fits. A door
+   * needs exactly one opposite pair of edges open (the corridor it gates) and the
+   * other opposite pair solid (the two anchor points). Anything else — a dead end,
+   * a corner, a T or cross junction — has no unambiguous axis and rejects.
+   */
+  public DoorAxis inferDoorAxis(Level lv, int mx, int my) {
+    if (!macroAllOpen(lv, mx, my)) {
+      return null;
+    }
+    boolean n = macroEdgeOpen(lv, mx, my, Dir.N), s = macroEdgeOpen(lv, mx, my, Dir.S);
+    boolean e = macroEdgeOpen(lv, mx, my, Dir.E), w = macroEdgeOpen(lv, mx, my, Dir.W);
+    if (n && s && !e && !w) {
+      return DoorAxis.EW; // corridor N–S; anchors (solid) E & W
+    }
+    if (e && w && !n && !s) {
+      return DoorAxis.NS; // corridor E–W; anchors (solid) N & S
+    }
+    return null;
+  }
+
+  /** whether {@code d} still satisfies the placement contract for its stored axis. */
+  public boolean doorValid(Level lv, Door d) {
+    return d != null && d.axis == inferDoorAxis(lv, d.mx, d.my);
+  }
+
   /** occupancy with out-of-bounds treated as solid rock — the renderer's wall field. */
   public boolean occupied(Level lv, int x, int y) {
     if (!lv.inBounds(x, y)) {
@@ -392,6 +509,22 @@ public class Dungeon {
         sb.append("doodad x=").append(dd.x).append(" y=").append(dd.y)
             .append(" id=").append(KV.q(dd.id))
             .append(" dir=").append(dd.dir.name().toLowerCase()).append('\n');
+      }
+      for (Door dr : lv.doors) {
+        sb.append("door mx=").append(dr.mx).append(" my=").append(dr.my)
+            .append(" axis=").append(dr.axis.name().toLowerCase())
+            .append(" lock=").append(dr.lock.name().toLowerCase());
+        if (dr.lock == DoorLock.KEY && !dr.key.isEmpty()) {
+          sb.append(" key=").append(KV.q(dr.key));
+        }
+        if (dr.lock == DoorLock.EVENT && !dr.event.isEmpty()) {
+          sb.append(" event=").append(KV.q(dr.event));
+        }
+        sb.append(" open=").append(dr.open);
+        if (!dr.note.isEmpty()) {
+          sb.append(" note=").append(KV.q(dr.note));
+        }
+        sb.append('\n');
       }
     }
     return sb.toString();
@@ -532,6 +665,21 @@ public class Dungeon {
           }
           cur.doodads.add(dd);
         }
+        case "door" -> {
+          if (cur == null) {
+            break;
+          }
+          Door dr = new Door();
+          dr.mx = kv.getInt("mx", 0);
+          dr.my = kv.getInt("my", 0);
+          dr.axis = "ns".equalsIgnoreCase(kv.get("axis", "ew")) ? DoorAxis.NS : DoorAxis.EW;
+          dr.lock = parseLock(kv.get("lock", "unlocked"));
+          dr.key = kv.get("key", "");
+          dr.event = kv.get("event", "");
+          dr.open = kv.getBool("open", false);
+          dr.note = kv.get("note", "");
+          cur.doors.add(dr);
+        }
         default -> { /* ignore unknown verbs for forward-compat */ }
       }
     }
@@ -554,6 +702,14 @@ public class Dungeon {
       return FeatureType.valueOf(s.toUpperCase());
     } catch (Exception e) {
       return FeatureType.LADDER_DOWN;
+    }
+  }
+
+  private static DoorLock parseLock(String s) {
+    try {
+      return DoorLock.valueOf(s.toUpperCase());
+    } catch (Exception e) {
+      return DoorLock.UNLOCKED;
     }
   }
 }

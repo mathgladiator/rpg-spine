@@ -182,6 +182,88 @@ public class DungeonModelTests {
     Files.deleteIfExists(f.toPath());
   }
 
+  /** carve a fully-open 5×5 macro cell, then a corridor stub past one edge. */
+  private static void carveMacro(Dungeon d, Dungeon.Level lv, int mx, int my) {
+    int floor = d.defaultFloorIndex();
+    for (int x = mx * 5; x < mx * 5 + 5; x++) {
+      for (int y = my * 5; y < my * 5 + 5; y++) {
+        lv.cells[x][y] = floor;
+      }
+    }
+  }
+
+  @Test
+  public void doorAxisInferenceNeedsTwoOppositeAnchors() {
+    Dungeon d = Dungeon.blank();
+    Dungeon.Level lv = d.levels.get(0); // 20×20 micro, all solid
+    int floor = d.defaultFloorIndex();
+    // open macro (1,1) plus the macro cells above and below → corridor runs N–S
+    carveMacro(d, lv, 1, 1);
+    carveMacro(d, lv, 1, 0);
+    carveMacro(d, lv, 1, 2);
+    // N & S open, E & W solid → door panel spans E–W
+    assertEquals(Dungeon.DoorAxis.EW, d.inferDoorAxis(lv, 1, 1));
+
+    // open the east neighbour too → now three sides open, ambiguous → no door
+    carveMacro(d, lv, 2, 1);
+    assertEquals(null, d.inferDoorAxis(lv, 1, 1));
+  }
+
+  @Test
+  public void doorRejectsPartlyWalledChamber() {
+    Dungeon d = Dungeon.blank();
+    Dungeon.Level lv = d.levels.get(0);
+    carveMacro(d, lv, 1, 1);
+    carveMacro(d, lv, 1, 0);
+    carveMacro(d, lv, 1, 2);
+    // a single wall cell inside the chamber breaks the "entire cell open" rule
+    lv.cells[1 * 5 + 2][1 * 5 + 2] = d.defaultWallIndex();
+    assertEquals(null, d.inferDoorAxis(lv, 1, 1));
+  }
+
+  @Test
+  public void doorRoundTripsAndValidates() throws Exception {
+    File f = File.createTempFile("door", ".dungeon");
+    f.deleteOnExit();
+    Dungeon d = Dungeon.blank();
+    Dungeon.Level lv = d.levels.get(0);
+    carveMacro(d, lv, 1, 1);
+    carveMacro(d, lv, 1, 0);
+    carveMacro(d, lv, 1, 2);
+
+    Dungeon.Door door = new Dungeon.Door();
+    door.mx = 1;
+    door.my = 1;
+    door.axis = d.inferDoorAxis(lv, 1, 1);
+    door.lock = Dungeon.DoorLock.KEY;
+    door.key = "brass key";
+    door.open = false;
+    door.note = "to the vault";
+    lv.doors.add(door);
+    assertTrue("contract holds when placed", d.doorValid(lv, door));
+
+    d.save(f);
+    Dungeon back = Dungeon.load(f);
+    Dungeon.Level bl = back.levels.get(0);
+    assertEquals(1, bl.doors.size());
+    Dungeon.Door bd = bl.doors.get(0);
+    assertEquals(1, bd.mx);
+    assertEquals(1, bd.my);
+    assertEquals(Dungeon.DoorAxis.EW, bd.axis);
+    assertEquals(Dungeon.DoorLock.KEY, bd.lock);
+    assertEquals("brass key", bd.key);
+    assertEquals("to the vault", bd.note);
+    assertFalse(bd.open);
+    assertEquals(bd, bl.doorAt(1, 1));
+    assertTrue(back.doorValid(bl, bd));
+
+    // sealing one anchor side's corridor doesn't matter, but opening a third side
+    // (so the cell becomes a junction) invalidates the door as a live diagnostic.
+    carveMacro(back, bl, 2, 1);
+    assertFalse(back.doorValid(bl, bd));
+    Files.deleteIfExists(f.toPath());
+  }
+
   @Test
   public void macroFillRoundTrips() throws Exception {
     File f = File.createTempFile("macrofill", ".dungeon");

@@ -68,7 +68,7 @@ public class DungeonEditor implements Editor {
   private static final Color ROCK = Color.web("#5a5a5a");
   private static final Color PURPLE = Color.web("#9c27b0");
 
-  private enum Tool { SELECT, PAINT, ERASE, LINE, FEATURE, MONSTER, TEMPLATE, REGION, DOODAD }
+  private enum Tool { SELECT, PAINT, ERASE, LINE, FEATURE, MONSTER, TEMPLATE, REGION, DOODAD, DOOR }
 
   private final File file;
   private final Label status;
@@ -110,6 +110,8 @@ public class DungeonEditor implements Editor {
   private final ComboBox<FeatureType> featurePick = new ComboBox<>();
   private final ComboBox<String> monsterPick = new ComboBox<>();
   private final TextField doodadId = new TextField("torch");
+  private final ComboBox<Dungeon.DoorLock> doorLock = new ComboBox<>();
+  private final TextField doorParam = new TextField();
   private final Map<String, Integer> monsterSizes = new TreeMap<>();
 
   private final ComboBox<String> levelPick = new ComboBox<>();
@@ -147,6 +149,7 @@ public class DungeonEditor implements Editor {
     box.getChildren().add(toolButton(tg, Tool.FEATURE, "Place feature (macro)"));
     box.getChildren().add(toolButton(tg, Tool.MONSTER, "Place monster (micro)"));
     box.getChildren().add(toolButton(tg, Tool.DOODAD, "Place doodad (micro)"));
+    box.getChildren().add(toolButton(tg, Tool.DOOR, "Place door (macro)"));
     box.getChildren().add(toolButton(tg, Tool.REGION, "Draw region (drag)"));
 
     brushShape.getItems().setAll("square", "circle", "diamond");
@@ -191,6 +194,11 @@ public class DungeonEditor implements Editor {
     refreshMonsterPick();
     box.getChildren().add(labeled("Monster", monsterPick));
     box.getChildren().add(labeled("Doodad id (direction auto-inferred)", doodadId));
+    doorLock.getItems().setAll(Dungeon.DoorLock.values());
+    doorLock.getSelectionModel().select(Dungeon.DoorLock.UNLOCKED);
+    doorParam.setPromptText("key item id / event id");
+    box.getChildren().add(labeled("Door lock (axis auto-inferred)", doorLock));
+    box.getChildren().add(labeled("Door key / event id", doorParam));
     discoverTemplates();
     templatePick.setCellFactory(lv -> templateCell());
     templatePick.setButtonCell(templateCell());
@@ -533,6 +541,7 @@ public class DungeonEditor implements Editor {
       case FEATURE -> { placeFeature(lv, x / MACRO, y / MACRO); afterEdit(x, y); }
       case MONSTER -> { placeMonster(lv, x, y); afterEdit(x, y); }
       case DOODAD -> { placeDoodad(lv, x, y); afterEdit(x, y); }
+      case DOOR -> { placeDoor(lv, x / MACRO, y / MACRO); afterEdit(x, y); }
       case TEMPLATE -> { stampTemplate(lv, x, y); afterEdit(x, y); }
       case REGION -> { regionActive = true; rx0 = rx1 = x; ry0 = ry1 = y; redraw(); }
     }
@@ -756,6 +765,37 @@ public class DungeonEditor implements Editor {
     lv.doodads.add(dd);
   }
 
+  /**
+   * Toggle a door on macro cell (mx,my). Clicking an existing door removes it;
+   * otherwise infer the axis from the chamber's open sides and add one — refusing
+   * cells that aren't a clean through-corridor (the {@link Dungeon#inferDoorAxis}
+   * contract). Lock mode + key/event id come from the placement pickers.
+   */
+  private void placeDoor(Level lv, int mx, int my) {
+    Dungeon.Door existing = lv.doorAt(mx, my);
+    if (existing != null) {
+      lv.doors.remove(existing);
+      return;
+    }
+    Dungeon.DoorAxis axis = dungeon.inferDoorAxis(lv, mx, my);
+    if (axis == null) {
+      status.setText("Door needs a fully-open macro cell with exactly two opposite open sides (a straight corridor).");
+      return;
+    }
+    Dungeon.Door dr = new Dungeon.Door();
+    dr.mx = mx;
+    dr.my = my;
+    dr.axis = axis;
+    dr.lock = doorLock.getValue() == null ? Dungeon.DoorLock.UNLOCKED : doorLock.getValue();
+    String param = doorParam.getText() == null ? "" : doorParam.getText().strip();
+    if (dr.lock == Dungeon.DoorLock.KEY) {
+      dr.key = param;
+    } else if (dr.lock == Dungeon.DoorLock.EVENT) {
+      dr.event = param;
+    }
+    lv.doors.add(dr);
+  }
+
   private Feature featureAt(Level lv, int mx, int my) {
     for (Feature f : lv.features) {
       if (f.mx == mx && f.my == my) {
@@ -856,6 +896,8 @@ public class DungeonEditor implements Editor {
       propsBox.getChildren().add(labeled("note", note));
     }
 
+    buildDoorInspector(lv, mx, my);
+
     propsBox.getChildren().add(section("Monsters here"));
     boolean any = false;
     for (MonsterPlacement mp : new ArrayList<>(lv.monsters)) {
@@ -897,6 +939,89 @@ public class DungeonEditor implements Editor {
       propsBox.getChildren().add(row);
     }
     populating = false;
+  }
+
+  /** door controls for the selected macro cell; mirrors the feature inspector. */
+  private void buildDoorInspector(Level lv, int mx, int my) {
+    propsBox.getChildren().add(section("Door (macro " + mx + "," + my + ")"));
+    Dungeon.Door dr = lv.doorAt(mx, my);
+    Dungeon.DoorAxis canHost = dungeon.inferDoorAxis(lv, mx, my);
+
+    if (dr == null && canHost == null) {
+      Label hint = new Label("This macro cell can't host a door.\nNeeds an all-open chamber with two opposite open sides.");
+      hint.setWrapText(true);
+      propsBox.getChildren().add(hint);
+      return;
+    }
+
+    ComboBox<String> mode = new ComboBox<>();
+    mode.getItems().add("(none)");
+    for (Dungeon.DoorLock l : Dungeon.DoorLock.values()) {
+      mode.getItems().add(l.name().toLowerCase());
+    }
+    mode.setValue(dr == null ? "(none)" : dr.lock.name().toLowerCase());
+    mode.valueProperty().addListener((o, a, b) -> {
+      if (populating) {
+        return;
+      }
+      Dungeon.Door cur = lv.doorAt(mx, my);
+      if ("(none)".equals(b)) {
+        if (cur != null) {
+          lv.doors.remove(cur);
+        }
+      } else {
+        if (cur == null) {
+          Dungeon.DoorAxis axis = dungeon.inferDoorAxis(lv, mx, my);
+          if (axis == null) {
+            return; // can't host
+          }
+          cur = new Dungeon.Door();
+          cur.mx = mx;
+          cur.my = my;
+          cur.axis = axis;
+          lv.doors.add(cur);
+        }
+        cur.lock = Dungeon.DoorLock.valueOf(b.toUpperCase());
+      }
+      markDirty();
+      rebuildProps();
+      redraw();
+    });
+    propsBox.getChildren().add(labeled("Lock", mode));
+
+    if (dr == null) {
+      return;
+    }
+
+    propsBox.getChildren().add(new Label("Axis: " + dr.axis
+        + (dr.axis == Dungeon.DoorAxis.EW ? "  (gates N–S)" : "  (gates E–W)")));
+    if (!dungeon.doorValid(lv, dr)) {
+      Label bad = new Label("⚠ Invalid: the chamber is no longer a clean two-anchor corridor.");
+      bad.setWrapText(true);
+      bad.setStyle("-fx-text-fill: #c62828;");
+      propsBox.getChildren().add(bad);
+    }
+
+    if (dr.lock == Dungeon.DoorLock.KEY) {
+      TextField key = new TextField(dr.key);
+      key.setPromptText("required key item id");
+      key.textProperty().addListener((o, a, b) -> { if (!populating) { dr.key = b; markDirty(); redraw(); } });
+      propsBox.getChildren().add(labeled("Key item id", key));
+    } else if (dr.lock == Dungeon.DoorLock.EVENT) {
+      TextField ev = new TextField(dr.event);
+      ev.setPromptText("controlling event id");
+      ev.textProperty().addListener((o, a, b) -> { if (!populating) { dr.event = b; markDirty(); redraw(); } });
+      propsBox.getChildren().add(labeled("Event id", ev));
+    }
+
+    javafx.scene.control.CheckBox open = new javafx.scene.control.CheckBox("open (initial state)");
+    open.setSelected(dr.open);
+    open.setOnAction(e -> { dr.open = open.isSelected(); markDirty(); redraw(); });
+    propsBox.getChildren().add(open);
+
+    TextField dnote = new TextField(dr.note);
+    dnote.textProperty().addListener((o, a, b) -> { if (!populating) { dr.note = b; markDirty(); } });
+    propsBox.getChildren().add(labeled("note", dnote));
   }
 
   private List<String> allTargetIds() {
@@ -963,6 +1088,7 @@ public class DungeonEditor implements Editor {
     drawFeatures(g, lv);
     drawMonsters(g, lv);
     drawDoodads(g, lv);
+    drawDoors(g, lv);
     drawRegions(g, lv);
     drawGhost(g, lv);
 
@@ -1054,6 +1180,49 @@ public class DungeonEditor implements Editor {
       g.setStroke(Color.web("#ef6c00"));
       g.setLineWidth(2);
       g.strokeRect(x * cellSize, y * cellSize, rw * cellSize, rh * cellSize);
+    }
+  }
+
+  /** the door panel: a bar across the macro center along its anchor axis. */
+  private void drawDoors(GraphicsContext g, Level lv) {
+    g.setTextAlign(TextAlignment.CENTER);
+    g.setFont(Font.font(Math.max(8, cellSize * 0.6)));
+    for (Dungeon.Door dr : lv.doors) {
+      boolean valid = dungeon.doorValid(lv, dr);
+      double x0 = dr.mx * MACRO * cellSize, y0 = dr.my * MACRO * cellSize;
+      double span = MACRO * (double) cellSize;
+      double cx = x0 + span / 2, cy = y0 + span / 2;
+      double t = Math.max(4, cellSize * 0.6);
+
+      Color c = !valid ? Color.web("#e53935")
+          : dr.open ? Color.web("#43a047")
+          : switch (dr.lock) {
+              case UNLOCKED -> Color.web("#ffb300");
+              case KEY -> Color.web("#1e88e5");
+              case EVENT -> Color.web("#8e24aa");
+            };
+      g.setFill(Color.color(c.getRed(), c.getGreen(), c.getBlue(), dr.open ? 0.30 : 0.85));
+      // EW axis → horizontal panel (anchors E & W); NS axis → vertical panel.
+      if (dr.axis == Dungeon.DoorAxis.EW) {
+        g.fillRect(x0 + 2, cy - t / 2, span - 4, t);
+      } else {
+        g.fillRect(cx - t / 2, y0 + 2, t, span - 4);
+      }
+      g.setStroke(c);
+      g.setLineWidth(valid ? 1.5 : 2.5);
+      if (!valid) {
+        g.setLineDashes(4, 3);
+      }
+      g.strokeRect(x0 + 1, y0 + 1, span - 2, span - 2);
+      g.setLineDashes();
+
+      String tag = switch (dr.lock) {
+        case UNLOCKED -> "door";
+        case KEY -> "🔑 " + (dr.key.isEmpty() ? "key?" : dr.key);
+        case EVENT -> "⚙ " + (dr.event.isEmpty() ? "event?" : dr.event);
+      };
+      g.setFill(c);
+      g.fillText(tag + (dr.open ? " [open]" : ""), cx, y0 + span - cellSize * 0.25);
     }
   }
 

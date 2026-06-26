@@ -165,6 +165,38 @@ walls with no other change. The `name` lets game logic reference the boolean
 
 Serialized as `region name=… x=… y=… w=… h=… on=<idx> off=<idx> state=<bool>`.
 
+## Doors — macro-cell gates (orthogonal to occupancy)
+
+A level may carry **doors**, each on a single **macro cell**. Unlike a region, a
+door is *orthogonal* to the occupancy grid: it never repaints cells. It is a
+movement **gate** at the macro center that the C engine consults independently of
+the inferred walls — a closed door blocks travel across the corridor; the wall
+surface is unchanged.
+
+A door is valid only when (`Dungeon.inferDoorAxis` / `doorValid`):
+
+- its macro cell is **entirely open floor** (a chamber, all 25 micro cells open),
+  and
+- the cell has **exactly two anchor points opposite each other through the
+  center**: the two macro-edge neighbours along the door's `axis` are solid rock
+  (the jambs the panel hangs from) and the perpendicular pair are open (the
+  corridor it gates).
+
+`axis = EW` anchors East & West (panel spans horizontally) and gates N–S travel;
+`axis = NS` is the rotation. Dead ends, corners, and T/cross junctions have no
+unambiguous axis and are **rejected** at placement (and drawn red as a live
+diagnostic if later edits break the contract). The editor infers the axis on
+placement; the author never sets it directly.
+
+Each door has a **lock mode** — `unlocked` (any interaction opens it), `key` (a
+named key item id must be held), or `event` (opened/closed only by a named script
+event) — plus an initial `open` bit (a runtime-mutable overlay bit, like a
+region's boolean). Serialized as
+`door mx=… my=… axis=ns|ew lock=unlocked|key|event [key=…|event=…] open=<bool> [note=…]`.
+
+The compiled binary form, the script that drives keyed/evented doors, and the
+overlay-bit save model are designed in `documents/design.dvm.md`.
+
 ## Doodads
 
 A micro cell may hold up to **three doodads** — small decorative/interactive
