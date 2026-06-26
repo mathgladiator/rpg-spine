@@ -97,10 +97,14 @@ public class ItemEditor implements Editor {
 
     AnimationPanel usage = new AnimationPanel("usage animation", item.usage, baseDir(), this::markDirty, true);
 
+    ReferencePanel refs = new ReferencePanel(item.references, file, item.id, ps.iconSize,
+        null, null, ReferencePanel.FLAT, this::markDirty);
+
     VBox box = new VBox(8,
         section("Item"), g,
         section("Icons"), icons,
         section("Usage"), usage,
+        section("References (generate → extract icons)"), refs,
         section("Type properties"), typeParams);
     box.setPadding(new Insets(4));
     root.setContent(box);

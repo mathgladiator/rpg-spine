@@ -11,3 +11,12 @@ struct Character {
 }
 
 1000: Character[] party;
+
+// effects a .story may invoke on-enter; each maps to a C
+// void effect_<name>(spine_t* doc, int param) at codegen.
+effect give_crown;
+effect mark_greedy;
+effect kill_player;
+effect resolve_vault;
+
+effect give_xp;

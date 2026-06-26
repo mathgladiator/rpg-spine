@@ -3,6 +3,7 @@ package mg.editor;
 import mg.editor.dungeon.Dungeon;
 import mg.editor.item.Item;
 import mg.editor.monster.Monster;
+import mg.editor.story.Story;
 import mg.editor.world.World;
 import mg.tokens.SpineLangException;
 import mg.tree.Parser;
@@ -71,6 +72,12 @@ public final class AssetAudit {
           referenceCheck(r, referenced, f, Item.load(f).imageRefs());
         } else if (name.endsWith(".world")) {
           referenceCheck(r, referenced, f, World.load(f).imageRefs());
+        } else if (name.endsWith(".story")) {
+          Story story = Story.load(f);
+          referenceCheck(r, referenced, f, story.imageRefs());
+          if (!story.lint().isEmpty()) {
+            r.errored.add(canon(f));
+          }
         } else if (name.endsWith(".dungeon")) {
           checkDungeon(r, knownMonsters, f);
         } else if (name.endsWith(".rpg")) {

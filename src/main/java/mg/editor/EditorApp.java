@@ -155,6 +155,14 @@ public class EditorApp extends Application {
     });
     stage.show();
 
+    // any file-producing action (reference gen, B&W extract, codegen) can ask the tree to rescan
+    ProjectRefresh.set(() -> {
+      if (root != null) {
+        tree.setRoot(buildTree(root));
+        recomputeErrors();
+      }
+    });
+
     chooseInitialProject();
   }
 
@@ -207,7 +215,19 @@ public class EditorApp extends Application {
     Menu audit = new Menu("Audit");
     audit.getItems().add(assetsAudit);
 
-    MenuBar bar = new MenuBar(project, settings, view, audit);
+    MenuItem compile = new MenuItem("Compile…");
+    compile.setAccelerator(new KeyCodeCombination(KeyCode.B, KeyCombination.CONTROL_DOWN));
+    compile.setOnAction(e -> {
+      if (root == null) {
+        error("No project open", "Open a project folder first.");
+      } else {
+        CompilerWindow.open(stage, root);
+      }
+    });
+    Menu build = new Menu("Build");
+    build.getItems().add(compile);
+
+    MenuBar bar = new MenuBar(project, settings, view, audit, build);
     // keep menus inside the window (not the macOS system bar) for consistency
     bar.setUseSystemMenuBar(false);
     return bar;
@@ -346,6 +366,8 @@ public class EditorApp extends Application {
     cellW.setEditable(true);
     Spinner<Integer> cellH = new Spinner<>(4, 512, p.animCellH);
     cellH.setEditable(true);
+    TextField outputDir = new TextField(p.outputDir);
+    outputDir.setPromptText("out");
 
     GridPane g = new GridPane();
     g.setHgap(8);
@@ -356,6 +378,7 @@ public class EditorApp extends Application {
     g.addRow(2, new Label("Icon size small (px):"), iconSmall);
     g.addRow(3, new Label("Animation cell width (px):"), cellW);
     g.addRow(4, new Label("Animation cell height (px):"), cellH);
+    g.addRow(5, new Label("C output dir (rel. to root):"), outputDir);
     dialog.getDialogPane().setContent(g);
 
     dialog.showAndWait().ifPresent(bt -> {
@@ -365,6 +388,8 @@ public class EditorApp extends Application {
         p.iconSmall = iconSmall.getValue();
         p.animCellW = cellW.getValue();
         p.animCellH = cellH.getValue();
+        String od = outputDir.getText() == null ? "" : outputDir.getText().strip();
+        p.outputDir = od.isEmpty() ? "out" : od;
         try {
           p.save(root);
           status.setText("saved project settings");
@@ -453,6 +478,7 @@ public class EditorApp extends Application {
             + ".world   location/path graph + scene editor\n"
             + ".monster monster art + level/skill tables\n"
             + ".item    item with type-specific properties\n"
+            + ".story   node-graph story editor (beat / choice / outcome)\n"
             + ".png     black & white image editor + animation stepper");
     hint.setPadding(new Insets(20));
     center.getChildren().setAll(hint);
@@ -864,6 +890,9 @@ public class EditorApp extends Application {
     if (name.endsWith(".item")) {
       return new ItemEditor(file, status);
     }
+    if (name.endsWith(".story")) {
+      return new StoryEditor(file, status);
+    }
     if (name.endsWith(".png")) {
       return new BwImageEditor(file, status);
     }
@@ -884,16 +913,36 @@ public class EditorApp extends Application {
     }
   }
 
+  /**
+   * Gate a transition that would lose the current editor's unsaved work. Offers
+   * <b>Save</b> (persist then proceed), <b>Discard</b> (proceed losing changes), or
+   * <b>Cancel</b> (abort the transition). Returns true when the caller may proceed.
+   */
   private boolean confirmDiscardIfDirty() {
     if (current == null || !current.isDirty()) {
       return true;
     }
+    String name = currentFile != null ? currentFile.getName() : "the file";
+    ButtonType saveBtn = new ButtonType("Save", ButtonBar.ButtonData.YES);
+    ButtonType discardBtn = new ButtonType("Discard", ButtonBar.ButtonData.NO);
     Alert alert = new Alert(Alert.AlertType.CONFIRMATION,
-        "Discard unsaved changes to " + (currentFile != null ? currentFile.getName() : "the file") + "?",
-        ButtonType.YES, ButtonType.NO);
+        "Save changes to " + name + " before continuing?", saveBtn, discardBtn, ButtonType.CANCEL);
     alert.setHeaderText("Unsaved changes");
     Optional<ButtonType> r = alert.showAndWait();
-    return r.isPresent() && r.get() == ButtonType.YES;
+    if (r.isEmpty() || r.get() == ButtonType.CANCEL) {
+      return false;
+    }
+    if (r.get() == saveBtn) {
+      try {
+        current.save();
+        recomputeErrors();
+      } catch (Exception ex) {
+        Log.error("save failed during discard prompt", ex);
+        error("Save failed", ex.getMessage());
+        return false; // don't lose work if the save didn't take
+      }
+    }
+    return true;
   }
 
   private void promptNewFile() {

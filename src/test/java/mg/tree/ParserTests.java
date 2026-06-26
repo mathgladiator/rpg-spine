@@ -7,6 +7,16 @@ import org.junit.Test;
 public class ParserTests {
 
   @Test
+  public void test_effects() throws SpineLangException {
+    Root root = new Root();
+    Parser.merge_string(root, "test",
+        "10: long score; effect kill_player; effect grant_gold; struct S { 1: int a; }");
+    Assert.assertEquals(java.util.List.of("kill_player", "grant_gold"), root.effects);
+    Assert.assertEquals(1, root.fields.size());
+    Assert.assertEquals(1, root.structs.size());
+  }
+
+  @Test
   public void test_empty() throws SpineLangException {
     Root root = new Root();
     Parser.merge_string(root, "test", "");

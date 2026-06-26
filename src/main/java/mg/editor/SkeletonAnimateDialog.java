@@ -57,7 +57,7 @@ public final class SkeletonAnimateDialog {
     };
   }
 
-  public static void open(Window owner, File refFile, File baseDir, String id,
+  public static void open(Window owner, File refFile, File baseDir, File refDir, String id,
                           Map<String, SkeletonData> store, Runnable onChange, Consumer<List<File>> onDone) {
     String key = key(baseDir, refFile);
 
@@ -229,7 +229,6 @@ public final class SkeletonAnimateDialog {
       DirMap m = map(direction.getValue());
       int s = size.getValue();
       String json = Skeleton.toPixelJson(working, s);
-      File refDir = new File(baseDir, "ref");
       String base = id + "-walk-" + direction.getValue();
       PixelLabGen.animateSkeleton(owner, refFile, s, s, json, m.view(), m.pixelLab(), working.size(), refDir, base, onDone);
       stage.close();

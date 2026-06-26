@@ -103,6 +103,13 @@ public class Parser {
       struct(); // throw the struct keyword away
       return true;
     }
+    Token detectEffect = tokens.popIf((t) -> t.isIdentifier("effect"));
+    if (detectEffect != null) {
+      Token name = id(); // the effect's name
+      expect(";");
+      root.effects.add(name.text);
+      return true;
+    }
     return false;
   }
 

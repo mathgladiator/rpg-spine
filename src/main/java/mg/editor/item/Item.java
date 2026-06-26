@@ -48,6 +48,8 @@ public class Item {
   public final List<String> icons = new ArrayList<>(List.of("", "", ""));
   /** the item-use animation (explicit frame files + speed + loop). */
   public final Animation usage = new Animation();
+  /** full-colour reference images (in {@code <base>.ref/}) the artist works from. */
+  public final List<String> references = new ArrayList<>();
   public final Map<String, String> params = new LinkedHashMap<>();
 
   /** reserved keys on the item line that are NOT type-specific params. */
@@ -113,6 +115,11 @@ public class Item {
       }
     }
     out.addAll(usage.frames);
+    for (String r : references) {
+      if (r != null && !r.isBlank()) {
+        out.add(r);
+      }
+    }
     return out;
   }
 
@@ -139,6 +146,11 @@ public class Item {
         .append(" loop=").append(usage.loop)
         .append(" frames=").append(KV.q(usage.framesJoined()))
         .append('\n');
+    for (String r : references) {
+      if (r != null && !r.isBlank()) {
+        sb.append("ref path=").append(KV.q(r)).append('\n');
+      }
+    }
     return sb.toString();
   }
 
@@ -185,6 +197,12 @@ public class Item {
           it.usage.fps = kv.getInt("fps", 6);
           it.usage.loop = kv.getInt("loop", 0);
           it.usage.setFramesJoined(kv.get("frames", ""));
+        }
+        case "ref" -> {
+          String p = kv.get("path", "");
+          if (!p.isBlank()) {
+            it.references.add(p);
+          }
         }
         default -> { /* ignore unknown */ }
       }

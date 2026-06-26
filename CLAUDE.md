@@ -79,12 +79,16 @@ Main class: `mg.Main`.
 - `Parser` is recursive descent over a `TokenEngine`, merging results into a
   shared `Root`. Entry points: `Parser.merge_string(root, name, src)` and
   `merge_tokens(root, tokens)`.
-- `Root` holds top-level `Field`s and `Struct`s; a `Struct` holds `Field`s.
+- `Root` holds top-level `Field`s, `Struct`s, and `effects` (a `List<String>`).
 - **Actual field syntax** (what the parser accepts today):
   ```
   <code>: [private|public] <type>[] <name>;
   struct <Name> { <fields...> }
+  effect <name>;            // registers a named side effect → Root.effects
   ```
+  An `effect <name>;` declaration registers a side effect content (e.g. a `.story`)
+  may invoke; at codegen it maps to `void effect_<name>(spine_t* doc, int param)`.
+  The `.story` editor reads `Root.effects` to populate its on-enter effect dropdown.
   e.g. `10: long score;`, `1000: Character[] party;`. Note the `[]` is **postfix
   on the type** (`Character[] party`), which differs from the milestone-1 README
   sketch (`Character characters[]`). `private`/`public` parse but carry no codegen
@@ -107,6 +111,7 @@ Launch flow: `Main` → `EditorLauncher` (sets a static `ROOT`, calls
 | `.world`   | `WorldEditor`     | `world.World`                |
 | `.monster` | `MonsterEditor`   | `monster.Monster`            |
 | `.item`    | `ItemEditor`      | `item.Item`                  |
+| `.story`   | `StoryEditor`     | `story.Story`                |
 | (other)    | `PlainTextEditor` | —                            |
 
 - `Editor` is the interface (`getNode`, `save`, `isDirty`, `title`).
@@ -169,19 +174,35 @@ Launch flow: `Main` → `EditorLauncher` (sets a static `ROOT`, calls
   exceptions (uncaught handler installed in `EditorApp.start`); **View ▸ Log**
   shows it live. Load failures show an in-pane "failed to load" panel.
 - `ProjectSettings` — `.project` (KV) in the project root: `icon_size`,
-  `icon_med`, `icon_small`, `anim_cell_w/h`. Loaded on `openProject`; edited via
-  **Settings ▸ Project Settings…**; read by the image editor (`→ icon`/`→ cell`)
-  and item editor (three icon-size slots).
+  `icon_med`, `icon_small`, `anim_cell_w/h`, and `output_dir` (the C codegen output
+  folder, relative to root). Loaded on `openProject`; edited via **Settings ▸
+  Project Settings…**; read by the image editor (`→ icon`/`→ cell`), item editor,
+  and the compiler.
+- `RefLayout` — the **per-document asset folder** convention: a document's generated
+  assets live in sibling folders named after the file, not a shared `ref/`. So
+  `goblin.monster` → `goblin.ref/` (full-colour references) + `goblin.ext/`
+  (extracted 1-bit frames); `vault.story` → `vault.ref/` / `vault.ext/`. Used by
+  `ReferencePanel` and `ReferenceExtractDialog`.
+- `ProjectRefresh` — a process-wide hook (`set`/`fire`) so any code that creates
+  files on disk (reference gen, B&W extract, codegen output) asks the tree to
+  rescan + recompute errors. `EditorApp` registers it on startup.
 - Tree right-click **context menu**: Open / Rename… / Clone / Delete
   (`EditorApp.installContextMenu`). Cancelling a dirty-discard keeps the prior
-  file selected (`suppressSelection`).
+  file selected (`suppressSelection`). The discard prompt
+  (`confirmDiscardIfDirty`) offers **Save / Discard / Cancel** — Save persists then
+  proceeds with the transition.
 - `ImagePicker` — project-scoped image chooser rooted at the editing file's
   folder (can't navigate above it), so every image path is relative and inside
   the project. Used by all image selections.
 - Asset building blocks: `asset.Animation` (explicit frame-file list + fps +
   loop) with `AnimationPanel` (add via ImagePicker, reorder, play/visualize).
-  `ReferencePanel` manages full-colour `.ref.png` references (prompt-new,
-  prompt-onto, add, remove). `ReferenceExtractDialog` selects a region of a
+  `ReferencePanel` manages full-colour references (prompt-new, prompt-onto, add,
+  remove) — **generic across editors**: an `Action` set (`SPRITE` = all incl.
+  rotate/animate/skeleton; `FLAT` = generate/style/extract/add/remove) controls which
+  buttons show, `skeletons`/`extractSettings` may be null, and it stores references in
+  the document's `<base>.ref/` folder (`RefLayout`). Used by the **monster** (SPRITE),
+  **story**, and **item** (FLAT) editors; the models each carry a `references` list.
+  `ReferenceExtractDialog` selects a region of a
   reference, resamples (Java2D bilinear) to a target size, and converts to 1-bit
   (any `Dither.Algo`) with a **live** preview (dropdowns update immediately;
   numeric fields commit on focus-loss/Enter) that also shows the encoded `.bwa`
@@ -223,10 +244,11 @@ Launch flow: `Main` → `EditorLauncher` (sets a static `ROOT`, calls
   path is **Animate…** = `animate-with-text` (reference + action verb → frames)
   via `AnimateTextDialog` with a **follow-reference** strength
   (`image_guidance_scale`, default ~6; PixelLab's own 1.4 ignores the reference).
-  Extracted B&W frames default into an `ext/` subfolder.
-- `ReferencePanel` references are stored in a `ref/` subfolder next to the
-  document; actions (wrapped in a FlowPane so none clip): Generate / Style onto /
-  Rotate / Animate / Skeleton (PixelLab), Extract → B&W, Add existing, Remove.
+  Extracted B&W frames default into the document's `<base>.ext/` subfolder.
+- `ReferencePanel` references are stored in the document's `<base>.ref/` subfolder
+  (`RefLayout`); actions (wrapped in a FlowPane so none clip) gated by the `Action`
+  set: Generate / Style onto / Rotate / Animate / Skeleton (PixelLab), Extract → B&W,
+  Add existing, Remove. Creating a reference/frame fires `ProjectRefresh`.
   Generate/Style use `GeneratePromptDialog` (prompt + output **size**, default
   128, clamped to the endpoint max). Selection-dependent actions warn if no
   reference is selected.
@@ -249,6 +271,27 @@ Launch flow: `Main` → `EditorLauncher` (sets a static `ROOT`, calls
   builds `World.Boundary` polylines (Finish/Cancel); and rubber-band / shift-click
   **multi-select** of objects (`multiSel`) with a common-property apply panel.
   `WorldModelTests` covers palette/image/boundary round-trip.
+- `StoryEditor` — a **node-graph editor** for `.story` (`story.Story`): a canvas of
+  draggable `beat`/`choice`/`outcome` boxes joined by directed edges, with tools
+  Select/Move, Connect (drag A→B: a beat sets `next`, a choice adds a decision),
+  + Beat/Choice/Outcome, and Delete. **Add/Delete snap the tool back to Select**
+  (hold **Ctrl** to keep the tool); **dragging empty canvas pans** (manual ScrollPane
+  scroll, for big graphs). The inspector edits kind, start-node, text, beat image /
+  outcome reward (via `ImagePicker`, project-relative, validated against **400×240
+  pure black & white**), a choice's decisions (label + target only), and a node's
+  **on-enter effects** — a list of `{name, param}` where `name` is a dropdown of
+  `effect <…>;` declarations discovered across the project's `.rpg` files (effects
+  compose; decisions carry none). The side panel also hosts a `ReferencePanel`
+  (`FLAT`) over `story.references`. A live `Story.lint()` panel flags bad start /
+  dangling edges / empty choices / unreachable nodes / no reachable ending;
+  `StoryModelTests` covers KV round-trip + lint. Implements the committed-run rule
+  (`documents/story.vm.md`); the binary `.svm` VM is still design-only.
+- `mg.codegen.Compiler` — the **C codegen front end** (work in progress, pure/UI-free,
+  `CompilerTests`): resolves the project-relative `output_dir`, parses the schema,
+  validates content (loads + `Story.lint()`, warns on undeclared effects), and emits a
+  `spine.gen.h` skeleton (the field/effect inventory + `EFF_*` defines; bodies TODO,
+  to be written separately). `CompilerWindow` (Build ▸ Compile…, Ctrl-B) runs it on a
+  background thread and streams a status log. See `documents/CODEGEN.md`.
 
 Model round-trips are covered by `MonsterModelTests`; `MonoTests` covers the
 image core. The JavaFX UI compiles and the jar assembles, but the interactive
@@ -313,6 +356,24 @@ editors and live Meshy calls have not been smoke-tested in a running app.
   overlay (`door_open`/`region_on`/`flag`). Doors are the worked example: a static
   `DOOR` op + an overlay bit + a desugared rule per lock mode. Design only — the
   emitter/compiler/C interpreter are unbuilt.
+- `documents/future.dungeon.ideas.md` — 20 dungeon-crawler mechanics not yet in the
+  model (spinners, plates/logic gates, one-way doors, hazard floors, light economy,
+  spawners, boss lock-ins, fog-of-war automap, …), each mapped to a grid/DVM/SPINE
+  hook, framed for the **committed-run** rule. A menu, not a spec.
+- `documents/level.design.theory.md` — level-design theory for the committed run
+  (**enter once, can't leave, die or clear; clearing → a `.story` reward**): legibility
+  for a no-automap grid crawler, the introduce→practice→test→combine teaching grammar,
+  an Act-I first-dungeon blueprint, attrition pacing, lock-and-key topology, the
+  cascade to endgame, and VM **regression-safety** (round-trip/golden-file/sim-harness/
+  reachability lint, explicit `IN_PROGRESS`/`CLEARED`/`DIED` terminal state).
+- `documents/story.vm.md` — the **Story VM** + `.story` node-graph editor: `beat`
+  (image+line) / `choice` (text+decisions) / `outcome` (survive|die) nodes; decisions
+  carry SPINE-enumerated **effects** (`flag:`/`item:`/`stat:`/`set:`/`goto:`) and/or
+  navigate; KV authoring format, binary `.svm` container + interpreter, dungeon-clear
+  handoff. Same committed-run rule. The **`story.Story` model + KV round-trip +
+  `StoryEditor` graph UI are built** (node-graph canvas, inspector, live `lint()`
+  diagnostics, audit-wired `imageRefs()`); the binary `.svm` emitter + C interpreter
+  remain design.
 - `documents/AI.GEN.md` — options analysis for the image-gen backend (Meshy ≈
   Google nano-banana; PixelLab/Retro Diffusion for native sprites; FLUX/Gemini
   direct), and the recommended `ImageGen` provider abstraction.

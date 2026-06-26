@@ -9,6 +9,14 @@ without inventing a runtime reflection system.**
 The short version of the recommendation is at the bottom. The reasoning matters
 more than the verdict, because the verdict shifts as the game grows.
 
+> **Status (front end started).** `mg.codegen.Compiler` is the work-in-progress
+> code generator: it resolves the project-relative output directory
+> (`ProjectSettings.outputDir`), parses the `.rpg` schema, validates content, and
+> emits a `spine.gen.h` skeleton — the authoritative field/effect inventory plus
+> `EFF_*` ids. It runs from **Build ▸ Compile…** (`CompilerWindow`, a streaming
+> status screen). The load/save and dungeon/story VM **bodies are still TODO**; this
+> document is the design they implement.
+
 ## What the device actually constrains
 
 Playdate is small but not _that_ small, and the limits point in a clear

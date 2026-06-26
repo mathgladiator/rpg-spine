@@ -19,38 +19,60 @@ import mg.editor.asset.ExtractSettings;
 import mg.editor.asset.SkeletonData;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
- * Manages a monster's full-colour {@code .ref.png} references: create one from a
- * prompt, derive a new one by prompting onto a selected reference, add an
- * existing image, or extract a black-and-white frame from a selected reference
- * (region select + resample). References are the high-fidelity domain the artist
- * works in before sampling down to 1-bit — there is no Gen/Edit on the frames
- * themselves; frames are produced here and then selected into animations.
+ * Manages a document's full-colour references: create one from a prompt, derive a
+ * new one by prompting onto a selected reference, add an existing image, or extract
+ * a black-and-white frame from a selected reference (region select + resample).
+ * References are the high-fidelity domain the artist works in before sampling down
+ * to 1-bit. References live in the document's {@code <base>.ref/} folder and
+ * extracted frames in {@code <base>.ext/} (see {@link RefLayout}).
+ *
+ * <p>Generic across editors: the {@link Action} set controls which buttons appear
+ * (sprite editors enable rotate/animate/skeleton; flat-image editors do not), and
+ * {@code skeletons}/{@code extractSettings} may be null when those features don't
+ * apply. Used by the monster, story, and item editors.
  */
 public class ReferencePanel extends VBox {
+
+  /** the operations a host editor can enable. */
+  public enum Action { GENERATE, STYLE, ROTATE, ANIMATE, SKELETON, EXTRACT, ADD, REMOVE }
+
+  /** full sprite workflow (monsters): every action. */
+  public static final Set<Action> SPRITE = Set.of(Action.values());
+  /** flat-image workflow (stories, items): generate / style / extract / add / remove. */
+  public static final Set<Action> FLAT =
+      Set.of(Action.GENERATE, Action.STYLE, Action.EXTRACT, Action.ADD, Action.REMOVE);
+
   private final List<String> references;
+  private final File doc;
   private final File baseDir;
   private final String id;
   private final int extractSize;
   private final Map<String, SkeletonData> skeletons;
   private final ExtractSettings extractSettings;
+  private final Set<Action> actions;
   private final Runnable onChange;
 
   private final ListView<String> list = new ListView<>();
   private final ImageView preview = new ImageView();
 
-  public ReferencePanel(List<String> references, File baseDir, String id, int extractSize,
-                        Map<String, SkeletonData> skeletons, ExtractSettings extractSettings, Runnable onChange) {
+  public ReferencePanel(List<String> references, File doc, String id, int extractSize,
+                        Map<String, SkeletonData> skeletons, ExtractSettings extractSettings,
+                        Set<Action> actions, Runnable onChange) {
     super(6);
     this.references = references;
-    this.baseDir = baseDir;
+    this.doc = doc;
+    this.baseDir = doc.getParentFile();
     this.id = id;
     this.extractSize = extractSize;
     this.skeletons = skeletons;
-    this.extractSettings = extractSettings;
+    this.extractSettings = extractSettings == null ? new ExtractSettings() : extractSettings;
+    this.actions = actions;
     this.onChange = onChange;
     setPadding(new Insets(6));
 
@@ -76,31 +98,46 @@ public class ReferencePanel extends VBox {
     preview.setFitWidth(180);
     preview.setFitHeight(180);
 
-    Button generate = new Button("Generate…");
-    generate.setOnAction(e -> generate());
-    Button style = new Button("Style onto…");
-    style.setOnAction(e -> style());
-    Button rotate = new Button("Rotate…");
-    rotate.setOnAction(e -> rotate());
-    Button animate = new Button("Animate…");
-    animate.setOnAction(e -> animate());
-    Button skeleton = new Button("Skeleton…");
-    skeleton.setOnAction(e -> skeleton());
-    Button extract = new Button("Extract → B&W…");
-    extract.setOnAction(e -> extract());
-    Button addExisting = new Button("Add existing…");
-    addExisting.setOnAction(e -> addExisting());
-    Button remove = new Button("Remove");
-    remove.setOnAction(e -> removeSelected());
+    List<Button> btns = new ArrayList<>();
+    if (actions.contains(Action.GENERATE)) {
+      btns.add(button("Generate…", this::generate));
+    }
+    if (actions.contains(Action.STYLE)) {
+      btns.add(button("Style onto…", this::style));
+    }
+    if (actions.contains(Action.ROTATE)) {
+      btns.add(button("Rotate…", this::rotate));
+    }
+    if (actions.contains(Action.ANIMATE)) {
+      btns.add(button("Animate…", this::animate));
+    }
+    if (actions.contains(Action.SKELETON) && skeletons != null) {
+      btns.add(button("Skeleton…", this::skeleton));
+    }
+    if (actions.contains(Action.EXTRACT)) {
+      btns.add(button("Extract → B&W…", this::extract));
+    }
+    if (actions.contains(Action.ADD)) {
+      btns.add(button("Add existing…", this::addExisting));
+    }
+    if (actions.contains(Action.REMOVE)) {
+      btns.add(button("Remove", this::removeSelected));
+    }
 
     // FlowPane so the buttons wrap instead of being clipped in a narrow panel
-    FlowPane buttons = new FlowPane(6, 6, generate, style, rotate, animate, skeleton,
-        extract, addExisting, remove);
+    FlowPane buttons = new FlowPane(6, 6);
+    buttons.getChildren().addAll(btns);
     HBox body = new HBox(10, list, new VBox(4, new Label("reference preview"), preview));
     HBox.setHgrow(list, Priority.ALWAYS);
     getChildren().addAll(
-        new Label("Reference images (PixelLab; stored in ref/ — full colour, view only)"),
+        new Label("References (PixelLab; in " + RefLayout.base(doc) + ".ref/ — full colour)"),
         body, buttons);
+  }
+
+  private static Button button(String label, Runnable action) {
+    Button b = new Button(label);
+    b.setOnAction(e -> action.run());
+    return b;
   }
 
   // -------------------------------------------------------------------- actions
@@ -149,7 +186,7 @@ public class ReferencePanel extends VBox {
     if (sel == null) {
       return;
     }
-    SkeletonAnimateDialog.open(window(), resolve(sel), baseDir, id, skeletons, onChange, files -> {
+    SkeletonAnimateDialog.open(window(), resolve(sel), baseDir, refDir(), id, skeletons, onChange, files -> {
       for (File f : files) {
         added(f);
       }
@@ -177,8 +214,9 @@ public class ReferencePanel extends VBox {
     if (sel == null) {
       return;
     }
-    ReferenceExtractDialog.open(window(), resolve(sel), baseDir, extractSize, extractSettings, onChange);
-    // the extracted 1-bit frame lands in the folder; select it into an animation
+    ReferenceExtractDialog.open(window(), resolve(sel), baseDir, RefLayout.extName(doc),
+        extractSize, extractSettings, onChange);
+    // the extracted 1-bit frame lands in <base>.ext/; select it into an animation / node image
   }
 
   private void addExisting() {
@@ -214,6 +252,7 @@ public class ReferencePanel extends VBox {
     }
     list.getSelectionModel().select(rel);
     changed();
+    ProjectRefresh.fire(); // a new reference file appeared on disk
   }
 
   // -------------------------------------------------------------------- helpers
@@ -228,7 +267,7 @@ public class ReferencePanel extends VBox {
   }
 
   private File refDir() {
-    return new File(baseDir, "ref");
+    return RefLayout.refDir(doc);
   }
 
   private File uniqueRef() {

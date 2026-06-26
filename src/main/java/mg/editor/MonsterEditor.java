@@ -103,8 +103,9 @@ public class MonsterEditor implements Editor {
 
   private Node buildArt() {
     ReferencePanel refs = new ReferencePanel(
-        monster.references, baseDir(), monster.id,
-        ProjectSettings.current().animCellW, monster.skeletons, monster.extract, this::markDirty);
+        monster.references, file, monster.id,
+        ProjectSettings.current().animCellW, monster.skeletons, monster.extract,
+        ReferencePanel.SPRITE, this::markDirty);
 
     VBox battle = new VBox(6,
         imageRow("stance", () -> monster.battleStance, v -> monster.battleStance = v),

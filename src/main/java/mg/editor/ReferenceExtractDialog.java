@@ -51,8 +51,8 @@ import javax.imageio.ImageIO;
 public final class ReferenceExtractDialog {
   private ReferenceExtractDialog() {}
 
-  public static Optional<File> open(Window owner, File refFile, File baseDir, int defaultSize,
-                                    ExtractSettings settings, Runnable onSettings) {
+  public static Optional<File> open(Window owner, File refFile, File baseDir, String extDirName,
+                                    int defaultSize, ExtractSettings settings, Runnable onSettings) {
     BufferedImage ref;
     try {
       ref = ImageIO.read(refFile);
@@ -101,8 +101,8 @@ public final class ReferenceExtractDialog {
     preview.setFitHeight(160);
     Label sizeLabel = new Label();
 
-    // default extracted frames into an ext/ subfolder to keep things tidy
-    TextField outName = new TextField("ext/" + baseName(refFile) + "-frame.png");
+    // default extracted frames into the document's <base>.ext/ subfolder to keep things tidy
+    TextField outName = new TextField(extDirName + "/" + baseName(refFile) + "-frame.png");
 
     // numeric crop-region editors (commit on focus loss / Enter)
     Spinner<Integer> cropX = intSpinner(0, iw, 0);
@@ -323,6 +323,7 @@ public final class ReferenceExtractDialog {
         File out = new File(baseDir, name);
         Mono.savePng(mono, out);
         Log.info("extracted " + out.getName() + " (" + mono.getWidth() + "×" + mono.getHeight() + ") from " + refFile.getName());
+        ProjectRefresh.fire(); // a new extracted frame appeared on disk
         if (settings != null) {
           settings.used = true;
           settings.width = tw.getValue();
