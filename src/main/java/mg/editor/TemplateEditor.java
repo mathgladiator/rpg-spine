@@ -19,6 +19,7 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
+import mg.editor.dungeon.Dungeon;
 import mg.editor.dungeon.Template;
 import mg.editor.dungeon.WallRenderer;
 
@@ -184,11 +185,11 @@ public class TemplateEditor implements Editor {
       @Override public Color color(int x, int y) { return WALLC; }
       @Override public int weight(int x, int y) { return 100; }
     };
-    WallRenderer.fill(g, w, h, cellSize, cells);
+    WallRenderer.fill(g, Dungeon.Fill.DIAGONAL, cellSize, 0, 0, w, h, cells);
     g.setStroke(Color.web("#9c27b0"));
     g.setLineWidth(1.4);
     g.setLineDashes(2, 3);
-    WallRenderer.boundary(g, w, h, cellSize, cells);
+    WallRenderer.boundary(g, Dungeon.Fill.DIAGONAL, cellSize, 0, 0, w, h, cells);
     g.setLineDashes();
 
     // grid

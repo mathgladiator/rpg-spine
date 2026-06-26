@@ -285,10 +285,12 @@ editors and live Meshy calls have not been smoke-tested in a running app.
   (`mg.assets.BwAnimBank` / `AnimType` / `BwCodec`). The B&W image editor shows the
   encoded size next to the PNG size in its status bar.
 - `documents/DUNGEON_WALLS.md` — the redesigned `.dungeon` model: a micro/macro
-  occupancy grid (walls implicit) and the **dual-grid marching-squares** wall
-  inference in `dungeon.WallRenderer` (corners at cell centers → infers diagonal
-  lines; weight = stone-sharp…dirt-smooth bow) that the editor and C ray caster
-  share, plus the point-in-wall test. The editor adds a brush (shape + size), a
+  occupancy grid (walls implicit) whose wall algorithm is chosen **per macro cell**
+  (`Level.macroFill`) — `MARCHING` (original per-cell rounded blob), `DIAGONAL`
+  (dual-grid marching squares that infers diagonal lines), or `SQUARES` (on/off,
+  weight ignored) — all in `dungeon.WallRenderer` (shared with the C ray caster;
+  **no colour blending** — DIAGONAL takes the majority material per contour cell).
+  The editor adds a brush (shape + size), a
   line tool with live preview, and stampable `Template`s (`dungeon.Template`,
   built-ins + project `.template` files) previewed under the cursor. Features
   (ladder/hole/portal/**target**) anchor to macro centers; ladders/holes/portals

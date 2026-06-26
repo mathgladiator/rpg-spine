@@ -33,6 +33,7 @@ import javafx.scene.text.TextAlignment;
 import mg.editor.dungeon.Dungeon;
 import mg.editor.dungeon.Dungeon.Feature;
 import mg.editor.dungeon.Dungeon.FeatureType;
+import mg.editor.dungeon.Dungeon.Fill;
 import mg.editor.dungeon.Dungeon.Kind;
 import mg.editor.dungeon.Dungeon.Level;
 import mg.editor.dungeon.Dungeon.Material;
@@ -613,6 +614,18 @@ public class DungeonEditor implements Editor {
     });
     propsBox.getChildren().add(labeled("Cell material", mat));
 
+    ComboBox<Fill> fillBox = new ComboBox<>();
+    fillBox.getItems().setAll(Fill.values());
+    fillBox.setValue(lv.fillAt(mx, my));
+    fillBox.valueProperty().addListener((o, a, b) -> {
+      if (!populating && b != null && mx < lv.macroW() && my < lv.macroH()) {
+        lv.macroFill[mx][my] = b;
+        markDirty();
+        redraw();
+      }
+    });
+    propsBox.getChildren().add(labeled("Macro fill (" + mx + "," + my + ")", fillBox));
+
     propsBox.getChildren().add(section("Feature (macro " + mx + "," + my + ")"));
     Feature f = featureAt(lv, mx, my);
     ComboBox<String> ftype = new ComboBox<>();
@@ -724,14 +737,28 @@ public class DungeonEditor implements Editor {
     }
 
     WallRenderer.Cells cells = levelCells(lv);
-    WallRenderer.fill(g, lv.width, lv.height, cellSize, cells);
+    // fill pass — each macro cell renders its 5×5 region with its own algorithm, clipped
+    for (int mx = 0; mx < lv.macroW(); mx++) {
+      for (int my = 0; my < lv.macroH(); my++) {
+        clipMacro(g, mx, my);
+        WallRenderer.fill(g, lv.fillAt(mx, my), cellSize, mx * MACRO, my * MACRO, MACRO, MACRO, cells);
+        g.restore();
+      }
+    }
 
     drawGrids(g, lv);
 
+    // boundary pass (purple dotted), same per-macro clip
     g.setStroke(PURPLE);
     g.setLineWidth(1.4);
     g.setLineDashes(2, 3);
-    WallRenderer.boundary(g, lv.width, lv.height, cellSize, cells);
+    for (int mx = 0; mx < lv.macroW(); mx++) {
+      for (int my = 0; my < lv.macroH(); my++) {
+        clipMacro(g, mx, my);
+        WallRenderer.boundary(g, lv.fillAt(mx, my), cellSize, mx * MACRO, my * MACRO, MACRO, MACRO, cells);
+        g.restore();
+      }
+    }
     g.setLineDashes();
 
     drawFeatures(g, lv);
@@ -746,6 +773,14 @@ public class DungeonEditor implements Editor {
     status.setText(dungeon.name + " — level " + levelIndex + " (" + lv.name + ") "
         + lv.width + "×" + lv.height + " micro / " + lv.macroW() + "×" + lv.macroH() + " macro"
         + (dirty ? " *" : ""));
+  }
+
+  /** save the GC state and clip to macro cell (mx,my); caller must g.restore(). */
+  private void clipMacro(GraphicsContext g, int mx, int my) {
+    g.save();
+    g.beginPath();
+    g.rect(mx * MACRO * cellSize, my * MACRO * cellSize, MACRO * (double) cellSize, MACRO * (double) cellSize);
+    g.clip();
   }
 
   private WallRenderer.Cells levelCells(Level lv) {

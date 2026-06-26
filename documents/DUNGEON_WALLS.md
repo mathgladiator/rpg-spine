@@ -25,7 +25,26 @@ o(x, y) = 1 if cell (x,y) is a WALL material, else 0
 o(x, y) = 1 for any (x,y) outside the level   // the world is solid rock
 ```
 
-## Per-cell wall geometry (marching-squares / metaball)
+## Fill algorithm — chosen per macro cell
+
+Each **macro cell** stores which wall algorithm renders (and collides) its 5×5
+region (`Level.macroFill[mx][my]`, serialized as `mfill` rows of `m`/`d`/`s`), so
+one map can mix styles. The editor renders each macro clipped to its rectangle:
+
+- **MARCHING** (`m`, the default / original) — *per-cell* rounded blob. Each wall
+  cell fills its own square; a corner is rounded (radius `(1 - weight/100)·½`
+  cell) only when both its edge neighbours are open. Orthogonal — no diagonal
+  bridging. Each cell keeps its own colour.
+- **DIAGONAL** (`d`) — the dual-grid marching squares below; infers diagonal lines.
+- **SQUARES** (`s`) — plain on/off blocks, one filled square per wall cell;
+  **weight is ignored**.
+
+**No colour blending.** MARCHING and SQUARES fill each cell with its own material
+colour. A DIAGONAL contour cell spans up to four cells; it uses the single
+**majority** material among its occupied corners (ties → scan order), never an
+average — so a dirt/stone seam stays crisp instead of going muddy.
+
+## DIAGONAL geometry (dual-grid marching squares)
 
 The surface is the **iso-contour of a dual grid** whose lattice corners are the
 cell **centers** (not cell corners). Each *dual square* sits between four adjacent
@@ -78,8 +97,17 @@ dotted purple, are the **inferred wall boundary** shown in the editor.
 
 ## C ray caster: point-in-wall test
 
-The geometry is local to one dual square — O(1), no precomputed mesh. To test a
-point `P` (in cell-center coordinates, so cell `(i,j)`'s center is at integer
+First read the macro cell's algorithm (`mfill`):
+
+- **SQUARES** — `solid = occ(floor(P.x), floor(P.y))`.
+- **MARCHING** — within the cell, solid everywhere except a rounded convex-corner
+  notch: for each corner whose two edge neighbours are open, the cell is empty
+  beyond a quarter-circle of radius `r = (1-weight/100)·½` centred `r` in from that
+  corner (the test that earlier shipped for the per-cell algorithm).
+- **DIAGONAL** — the dual-square test below.
+
+The DIAGONAL geometry is local to one dual square — O(1), no precomputed mesh. To
+test a point `P` (in cell-center coordinates, so cell `(i,j)`'s center is at integer
 `(i,j)`):
 
 ```c

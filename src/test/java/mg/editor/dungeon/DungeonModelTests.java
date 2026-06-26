@@ -107,6 +107,34 @@ public class DungeonModelTests {
   }
 
   @Test
+  public void macroFillRoundTrips() throws Exception {
+    File f = File.createTempFile("macrofill", ".dungeon");
+    f.deleteOnExit();
+    Dungeon d = Dungeon.blank();
+    Dungeon.Level lv = d.levels.get(0); // 20×20 micro → 4×4 macro
+    assertEquals(Dungeon.Fill.MARCHING, lv.fillAt(0, 0)); // default
+    lv.macroFill[1][2] = Dungeon.Fill.DIAGONAL;
+    lv.macroFill[3][3] = Dungeon.Fill.SQUARES;
+    d.save(f);
+
+    Dungeon.Level bl = Dungeon.load(f).levels.get(0);
+    assertEquals(Dungeon.Fill.DIAGONAL, bl.fillAt(1, 2));
+    assertEquals(Dungeon.Fill.SQUARES, bl.fillAt(3, 3));
+    assertEquals(Dungeon.Fill.MARCHING, bl.fillAt(0, 0));
+    Files.deleteIfExists(f.toPath());
+  }
+
+  @Test
+  public void resizePreservesMacroFill() {
+    Dungeon d = Dungeon.blank();
+    Dungeon.Level lv = d.levels.get(0);
+    lv.macroFill[0][0] = Dungeon.Fill.SQUARES;
+    lv.resize(30, 30, d.defaultWallIndex()); // 6×6 macro
+    assertEquals(Dungeon.Fill.SQUARES, lv.fillAt(0, 0));
+    assertEquals(Dungeon.Fill.MARCHING, lv.fillAt(5, 5)); // new area defaults
+  }
+
+  @Test
   public void paletteOverThirtySixCellsClampOnWrite() {
     // base-36 row encoding supports indices 0..35; ensure encode/decode is stable for in-range indices
     Dungeon d = Dungeon.blank();

@@ -42,6 +42,36 @@ public class Dungeon {
   public enum Kind { FLOOR, WALL }
 
   /**
+   * How a macro cell's 5&times;5 wall region is rendered/collided. Each macro cell
+   * picks its own so a map can mix styles:
+   * <ul>
+   *   <li>{@link #MARCHING} — the original per-cell rounded blob (convex corners
+   *       rounded by weight); orthogonal, no diagonal bridging.
+   *   <li>{@link #DIAGONAL} — dual-grid marching squares that infers diagonal
+   *       lines from staggered cells.
+   *   <li>{@link #SQUARES} — plain on/off blocks; weight ignored.
+   * </ul>
+   */
+  public enum Fill {
+    MARCHING('m'), DIAGONAL('d'), SQUARES('s');
+
+    public final char code;
+
+    Fill(char code) {
+      this.code = code;
+    }
+
+    public static Fill fromCode(char c) {
+      for (Fill f : values()) {
+        if (f.code == c) {
+          return f;
+        }
+      }
+      return MARCHING;
+    }
+  }
+
+  /**
    * What a feature does; all anchor to a macro-cell center. {@link #TARGET} is a
    * named destination any cell can become; ladders/holes/portals send the party to
    * a target <em>by id</em> rather than by coordinates, so moving a target never
@@ -93,6 +123,7 @@ public class Dungeon {
     public int width;        // micro cells (multiple of MACRO)
     public int height;       // micro cells (multiple of MACRO)
     public int[][] cells;    // palette index per micro cell, [x][y]
+    public Fill[][] macroFill; // wall algorithm per macro cell, [mx][my]
     public final List<Feature> features = new ArrayList<>();
     public final List<MonsterPlacement> monsters = new ArrayList<>();
 
@@ -104,6 +135,18 @@ public class Dungeon {
       for (int[] col : cells) {
         Arrays.fill(col, fill);
       }
+      this.macroFill = new Fill[macroW()][macroH()];
+      for (Fill[] col : macroFill) {
+        Arrays.fill(col, Fill.MARCHING);
+      }
+    }
+
+    /** the wall algorithm for macro cell (mx,my); MARCHING out of range. */
+    public Fill fillAt(int mx, int my) {
+      if (mx < 0 || my < 0 || mx >= macroW() || my >= macroH()) {
+        return Fill.MARCHING;
+      }
+      return macroFill[mx][my];
     }
 
     public int macroW() {
@@ -133,7 +176,16 @@ public class Dungeon {
           grid[x][y] = (x < width && y < height) ? cells[x][y] : fill;
         }
       }
+      int oldMacroW = macroFill.length;
+      int oldMacroH = oldMacroW > 0 ? macroFill[0].length : 0;
+      Fill[][] mf = new Fill[nw / MACRO][nh / MACRO];
+      for (int mx = 0; mx < mf.length; mx++) {
+        for (int my = 0; my < mf[0].length; my++) {
+          mf[mx][my] = (mx < oldMacroW && my < oldMacroH) ? macroFill[mx][my] : Fill.MARCHING;
+        }
+      }
       cells = grid;
+      macroFill = mf;
       width = nw;
       height = nh;
     }
@@ -236,6 +288,13 @@ public class Dungeon {
         }
         sb.append("row y=").append(y).append(" cells=").append(KV.q(row.toString())).append('\n');
       }
+      for (int my = 0; my < lv.macroH(); my++) {
+        StringBuilder row = new StringBuilder(lv.macroW());
+        for (int mx = 0; mx < lv.macroW(); mx++) {
+          row.append(lv.macroFill[mx][my].code);
+        }
+        sb.append("mfill y=").append(my).append(" cells=").append(KV.q(row.toString())).append('\n');
+      }
       for (Feature f : lv.features) {
         sb.append("feature type=").append(f.type.name().toLowerCase())
             .append(" mx=").append(f.mx).append(" my=").append(f.my);
@@ -325,6 +384,18 @@ public class Dungeon {
             for (int x = 0; x < cur.width && x < cells.length(); x++) {
               int idx = Character.digit(cells.charAt(x), 36);
               cur.cells[x][y] = idx < 0 ? 0 : idx;
+            }
+          }
+        }
+        case "mfill" -> {
+          if (cur == null) {
+            break;
+          }
+          int my = kv.getInt("y", -1);
+          String cells = kv.get("cells", "");
+          if (my >= 0 && my < cur.macroH()) {
+            for (int mx = 0; mx < cur.macroW() && mx < cells.length(); mx++) {
+              cur.macroFill[mx][my] = Fill.fromCode(cells.charAt(mx));
             }
           }
         }

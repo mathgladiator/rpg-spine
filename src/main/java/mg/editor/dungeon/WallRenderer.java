@@ -7,26 +7,27 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Renders the inferred wall surface of an occupancy grid with <b>dual-grid
- * marching squares</b>: the lattice corners are the micro-cell <em>centers</em>,
- * so each 2&times;2 block of cells contributes one contour cell. This naturally
- * forms straight diagonal lines (a single wall cell is a small column; two
- * orthogonally or <em>diagonally</em> adjacent wall cells join with a line), which
- * a per-corner rounding pass cannot do.
+ * Renders the inferred wall surface of an occupancy grid. The algorithm is chosen
+ * per macro cell ({@link Dungeon.Fill}); callers clip to a macro's rectangle and
+ * call {@link #fill}/{@link #boundary} for that macro's cell range:
  *
- * <p>Each wall material's {@code weight} (0..100) bows the boundary segments: 100
- * keeps them straight (sharp stone, crisp diagonals); 0 bows them outward for a
- * smooth, organic edge (dirt). See {@code documents/DUNGEON_WALLS.md} — the C ray
- * caster must implement the same case table.
+ * <ul>
+ *   <li>{@link Dungeon.Fill#MARCHING} — per-cell rounded blob: each wall cell fills
+ *       its square with convex corners rounded by the cell's weight. Orthogonal.
+ *   <li>{@link Dungeon.Fill#DIAGONAL} — dual-grid marching squares (lattice corners
+ *       at cell centers) which connects staggered cells into diagonal lines.
+ *   <li>{@link Dungeon.Fill#SQUARES} — plain on/off blocks; weight ignored.
+ * </ul>
  *
- * <p>Used by both {@link mg.editor.DungeonEditor} and the template editor; callers
- * supply a {@link Cells} view (out-of-bounds occupancy is the caller's choice).
+ * <p>No colour blending: every cell fills with its own material colour, and a
+ * DIAGONAL contour cell uses the single <em>majority</em> material of its occupied
+ * corners (no averaging of e.g. dirt and stone). See
+ * {@code documents/DUNGEON_WALLS.md}; the C ray caster must match.
  */
 public final class WallRenderer {
 
   private WallRenderer() {}
 
-  /** how far (fraction of the half-diagonal) a fully-smooth edge bows; kept modest so lines stay crisp. */
   private static final double MAX_BOW = 0.5;
 
   /** a grid view: occupancy plus the colour/weight of occupied cells. */
@@ -41,11 +42,181 @@ public final class WallRenderer {
     int weight(int x, int y);
   }
 
+  // ----- dispatch -------------------------------------------------------------
+
+  /** fill the wall bodies for cells [x0,x0+w) × [y0,y0+h) using {@code algo}. */
+  public static void fill(GraphicsContext g, Dungeon.Fill algo, double s, int x0, int y0, int w, int h, Cells c) {
+    switch (algo) {
+      case SQUARES -> squaresFill(g, s, x0, y0, w, h, c);
+      case MARCHING -> marchingFill(g, s, x0, y0, w, h, c);
+      case DIAGONAL -> diagonalFill(g, s, x0, y0, w, h, c);
+    }
+  }
+
+  /** stroke the inferred boundary (caller sets stroke colour/width/dashes). */
+  public static void boundary(GraphicsContext g, Dungeon.Fill algo, double s, int x0, int y0, int w, int h, Cells c) {
+    switch (algo) {
+      case SQUARES -> squaresBoundary(g, s, x0, y0, w, h, c);
+      case MARCHING -> marchingBoundary(g, s, x0, y0, w, h, c);
+      case DIAGONAL -> diagonalBoundary(g, s, x0, y0, w, h, c);
+    }
+  }
+
+  // ----- SQUARES --------------------------------------------------------------
+
+  private static void squaresFill(GraphicsContext g, double s, int x0, int y0, int w, int h, Cells c) {
+    for (int x = x0; x < x0 + w; x++) {
+      for (int y = y0; y < y0 + h; y++) {
+        if (c.occupied(x, y)) {
+          g.setFill(c.color(x, y));
+          g.fillRect(x * s, y * s, s, s);
+        }
+      }
+    }
+  }
+
+  private static void squaresBoundary(GraphicsContext g, double s, int x0, int y0, int w, int h, Cells c) {
+    for (int x = x0; x < x0 + w; x++) {
+      for (int y = y0; y < y0 + h; y++) {
+        if (!c.occupied(x, y)) {
+          continue;
+        }
+        double px = x * s, py = y * s;
+        if (!c.occupied(x, y - 1)) g.strokeLine(px, py, px + s, py);
+        if (!c.occupied(x + 1, y)) g.strokeLine(px + s, py, px + s, py + s);
+        if (!c.occupied(x, y + 1)) g.strokeLine(px, py + s, px + s, py + s);
+        if (!c.occupied(x - 1, y)) g.strokeLine(px, py, px, py + s);
+      }
+    }
+  }
+
+  // ----- MARCHING (per-cell rounded blob) -------------------------------------
+
+  private static double radius(double s, int weight) {
+    return Math.min((1.0 - weight / 100.0) * (s * 0.5), s / 2);
+  }
+
+  private static void marchingFill(GraphicsContext g, double s, int x0, int y0, int w, int h, Cells c) {
+    for (int x = x0; x < x0 + w; x++) {
+      for (int y = y0; y < y0 + h; y++) {
+        if (!c.occupied(x, y)) {
+          continue;
+        }
+        double px = x * s, py = y * s;
+        double r = radius(s, c.weight(x, y));
+        boolean tl = !c.occupied(x, y - 1) && !c.occupied(x - 1, y);
+        boolean tr = !c.occupied(x, y - 1) && !c.occupied(x + 1, y);
+        boolean br = !c.occupied(x, y + 1) && !c.occupied(x + 1, y);
+        boolean bl = !c.occupied(x, y + 1) && !c.occupied(x - 1, y);
+        g.setFill(c.color(x, y));
+        g.beginPath();
+        g.moveTo(px + (tl ? r : 0), py);
+        if (tr) { g.lineTo(px + s - r, py); g.quadraticCurveTo(px + s, py, px + s, py + r); }
+        else { g.lineTo(px + s, py); }
+        if (br) { g.lineTo(px + s, py + s - r); g.quadraticCurveTo(px + s, py + s, px + s - r, py + s); }
+        else { g.lineTo(px + s, py + s); }
+        if (bl) { g.lineTo(px + r, py + s); g.quadraticCurveTo(px, py + s, px, py + s - r); }
+        else { g.lineTo(px, py + s); }
+        if (tl) { g.lineTo(px, py + r); g.quadraticCurveTo(px, py, px + r, py); }
+        else { g.lineTo(px, py); }
+        g.closePath();
+        g.fill();
+      }
+    }
+  }
+
+  private static void marchingBoundary(GraphicsContext g, double s, int x0, int y0, int w, int h, Cells c) {
+    for (int x = x0; x < x0 + w; x++) {
+      for (int y = y0; y < y0 + h; y++) {
+        if (!c.occupied(x, y)) {
+          continue;
+        }
+        double px = x * s, py = y * s;
+        double r = radius(s, c.weight(x, y));
+        boolean openN = !c.occupied(x, y - 1), openE = !c.occupied(x + 1, y);
+        boolean openS = !c.occupied(x, y + 1), openW = !c.occupied(x - 1, y);
+        boolean tl = openN && openW, tr = openN && openE, br = openS && openE, bl = openS && openW;
+        if (openN) g.strokeLine(px + (tl ? r : 0), py, px + s - (tr ? r : 0), py);
+        if (openE) g.strokeLine(px + s, py + (tr ? r : 0), px + s, py + s - (br ? r : 0));
+        if (openS) g.strokeLine(px + (bl ? r : 0), py + s, px + s - (br ? r : 0), py + s);
+        if (openW) g.strokeLine(px, py + (tl ? r : 0), px, py + s - (bl ? r : 0));
+        if (tl) arc(g, px, py + r, px, py, px + r, py);
+        if (tr) arc(g, px + s - r, py, px + s, py, px + s, py + r);
+        if (br) arc(g, px + s, py + s - r, px + s, py + s, px + s - r, py + s);
+        if (bl) arc(g, px + r, py + s, px, py + s, px, py + s - r);
+      }
+    }
+  }
+
+  private static void arc(GraphicsContext g, double x0, double y0, double cx, double cy, double x1, double y1) {
+    g.beginPath();
+    g.moveTo(x0, y0);
+    g.quadraticCurveTo(cx, cy, x1, y1);
+    g.stroke();
+  }
+
+  // ----- DIAGONAL (dual-grid marching squares) --------------------------------
+
   private record Piece(double[][] ring, boolean[] boundary) {}
 
-  /** fill the wall bodies. */
-  public static void fill(GraphicsContext g, int w, int h, double s, Cells cells) {
-    forEachSquare(w, h, s, cells, (color, weight, centroid, pieces) -> {
+  private interface SquareSink {
+    void accept(Color color, int weight, double[] centroid, List<Piece> pieces);
+  }
+
+  private static void forEachSquare(double s, int x0, int y0, int w, int h, Cells cells, SquareSink sink) {
+    for (int i = x0 - 1; i < x0 + w; i++) {
+      for (int j = y0 - 1; j < y0 + h; j++) {
+        boolean a = cells.occupied(i, j);
+        boolean b = cells.occupied(i + 1, j);
+        boolean cc = cells.occupied(i + 1, j + 1);
+        boolean d = cells.occupied(i, j + 1);
+        int code = (a ? 8 : 0) | (b ? 4 : 0) | (cc ? 2 : 0) | (d ? 1 : 0);
+        if (code == 0) {
+          continue;
+        }
+        double left = i * s + s / 2, top = j * s + s / 2;
+        double right = (i + 1) * s + s / 2, bottom = (j + 1) * s + s / 2;
+        double[] TL = {left, top}, TR = {right, top}, BR = {right, bottom}, BL = {left, bottom};
+        double[] mT = {(left + right) / 2, top}, mR = {right, (top + bottom) / 2};
+        double[] mB = {(left + right) / 2, bottom}, mL = {left, (top + bottom) / 2};
+
+        // majority colour/weight (no blending) + centroid of occupied corner points
+        List<Color> cols = new ArrayList<>(4);
+        List<Integer> wts = new ArrayList<>(4);
+        double cx = 0, cy = 0;
+        int occ = 0;
+        if (a) { cols.add(cells.color(i, j)); wts.add(cells.weight(i, j)); cx += TL[0]; cy += TL[1]; occ++; }
+        if (b) { cols.add(cells.color(i + 1, j)); wts.add(cells.weight(i + 1, j)); cx += TR[0]; cy += TR[1]; occ++; }
+        if (cc) { cols.add(cells.color(i + 1, j + 1)); wts.add(cells.weight(i + 1, j + 1)); cx += BR[0]; cy += BR[1]; occ++; }
+        if (d) { cols.add(cells.color(i, j + 1)); wts.add(cells.weight(i, j + 1)); cx += BL[0]; cy += BL[1]; occ++; }
+        int rep = majority(cols);
+        double[] centroid = {cx / occ, cy / occ};
+
+        sink.accept(cols.get(rep), wts.get(rep), centroid, pieces(code, TL, TR, BR, BL, mT, mR, mB, mL));
+      }
+    }
+  }
+
+  /** index of the most common colour (ties → first), so a square takes one material, never a blend. */
+  private static int majority(List<Color> cols) {
+    int best = 0, bestCount = 0;
+    for (int i = 0; i < cols.size(); i++) {
+      int count = 0;
+      for (Color c : cols) {
+        if (c.equals(cols.get(i))) {
+          count++;
+        }
+      }
+      if (count > bestCount) {
+        bestCount = count;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  private static void diagonalFill(GraphicsContext g, double s, int x0, int y0, int w, int h, Cells c) {
+    forEachSquare(s, x0, y0, w, h, c, (color, weight, centroid, pieces) -> {
       g.setFill(color);
       for (Piece p : pieces) {
         double[][] ring = p.ring();
@@ -68,9 +239,8 @@ public final class WallRenderer {
     });
   }
 
-  /** stroke the inferred boundary (caller sets stroke colour, width and dashes). */
-  public static void boundary(GraphicsContext g, int w, int h, double s, Cells cells) {
-    forEachSquare(w, h, s, cells, (color, weight, centroid, pieces) -> {
+  private static void diagonalBoundary(GraphicsContext g, double s, int x0, int y0, int w, int h, Cells c) {
+    forEachSquare(s, x0, y0, w, h, c, (color, weight, centroid, pieces) -> {
       for (Piece p : pieces) {
         double[][] ring = p.ring();
         boolean[] bnd = p.boundary();
@@ -91,44 +261,6 @@ public final class WallRenderer {
     });
   }
 
-  private interface SquareSink {
-    void accept(Color color, int weight, double[] centroid, List<Piece> pieces);
-  }
-
-  private static void forEachSquare(int w, int h, double s, Cells cells, SquareSink sink) {
-    for (int i = -1; i < w; i++) {
-      for (int j = -1; j < h; j++) {
-        boolean a = cells.occupied(i, j);          // TL = (i,j)
-        boolean b = cells.occupied(i + 1, j);      // TR
-        boolean c = cells.occupied(i + 1, j + 1);  // BR
-        boolean d = cells.occupied(i, j + 1);      // BL
-        int code = (a ? 8 : 0) | (b ? 4 : 0) | (c ? 2 : 0) | (d ? 1 : 0);
-        if (code == 0) {
-          continue;
-        }
-        double left = i * s + s / 2, top = j * s + s / 2;
-        double right = (i + 1) * s + s / 2, bottom = (j + 1) * s + s / 2;
-        double[] TL = {left, top}, TR = {right, top}, BR = {right, bottom}, BL = {left, bottom};
-        double[] mT = {(left + right) / 2, top}, mR = {right, (top + bottom) / 2};
-        double[] mB = {(left + right) / 2, bottom}, mL = {left, (top + bottom) / 2};
-
-        // colour / weight / centroid from the occupied corners
-        double rSum = 0, gSum = 0, bSum = 0, wSum = 0, cxSum = 0, cySum = 0;
-        int occ = 0;
-        if (a) { Color col = cells.color(i, j); rSum += col.getRed(); gSum += col.getGreen(); bSum += col.getBlue(); wSum += cells.weight(i, j); cxSum += TL[0]; cySum += TL[1]; occ++; }
-        if (b) { Color col = cells.color(i + 1, j); rSum += col.getRed(); gSum += col.getGreen(); bSum += col.getBlue(); wSum += cells.weight(i + 1, j); cxSum += TR[0]; cySum += TR[1]; occ++; }
-        if (c) { Color col = cells.color(i + 1, j + 1); rSum += col.getRed(); gSum += col.getGreen(); bSum += col.getBlue(); wSum += cells.weight(i + 1, j + 1); cxSum += BR[0]; cySum += BR[1]; occ++; }
-        if (d) { Color col = cells.color(i, j + 1); rSum += col.getRed(); gSum += col.getGreen(); bSum += col.getBlue(); wSum += cells.weight(i, j + 1); cxSum += BL[0]; cySum += BL[1]; occ++; }
-        Color color = Color.color(rSum / occ, gSum / occ, bSum / occ);
-        int weight = (int) Math.round(wSum / occ);
-        double[] centroid = {cxSum / occ, cySum / occ};
-
-        sink.accept(color, weight, centroid, pieces(code, TL, TR, BR, BL, mT, mR, mB, mL));
-      }
-    }
-  }
-
-  /** the occupied polygon(s) for a marching-squares case, with boundary edges flagged. */
   private static List<Piece> pieces(int code, double[] TL, double[] TR, double[] BR, double[] BL,
                                     double[] mT, double[] mR, double[] mB, double[] mL) {
     List<Piece> out = new ArrayList<>(2);
@@ -146,7 +278,6 @@ public final class WallRenderer {
       case 11 -> out.add(new Piece(new double[][] {TL, mT, mR, BR, BL}, new boolean[] {false, true, false, false, false}));
       case 13 -> out.add(new Piece(new double[][] {TL, TR, mR, mB, BL}, new boolean[] {false, false, true, false, false}));
       case 14 -> out.add(new Piece(new double[][] {TL, TR, BR, mB, mL}, new boolean[] {false, false, false, true, false}));
-      // diagonals: connect the occupied corners so staggered cells form a diagonal line
       case 5 -> out.add(new Piece(new double[][] {mT, TR, mR, mB, BL, mL},
           new boolean[] {false, false, true, false, false, true}));
       case 10 -> out.add(new Piece(new double[][] {TL, mT, mR, BR, mB, mL},
@@ -156,7 +287,6 @@ public final class WallRenderer {
     return out;
   }
 
-  /** control point that bows a boundary edge outward (away from the occupied centroid) by weight. */
   private static double[] bow(double[] p, double[] q, double[] centroid, int weight) {
     double mx = (p[0] + q[0]) / 2, my = (p[1] + q[1]) / 2;
     double amt = (1.0 - weight / 100.0) * MAX_BOW;
