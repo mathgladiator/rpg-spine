@@ -9,12 +9,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * A reusable drawing stamp: a small grid of tri-state cells (wall / open / skip)
- * with no floor material or features — just occupancy. Templates are authored in
- * the template editor, saved as {@code .template}, and stamped into any dungeon
- * (with a live preview): {@code WALL} cells become the chosen wall material,
- * {@code OPEN} cells the chosen floor, and {@code SKIP} cells are left untouched
- * so a stamp only changes what it draws.
+ * A reusable room stamp: a grid of tri-state cells (wall / open / skip) sized in
+ * <b>macro units</b> (its micro width/height are always multiples of
+ * {@link Dungeon#MACRO}). It carries no floor material or features — just
+ * occupancy — and is authored in the template editor, saved as {@code .template},
+ * and stamped into a dungeon <b>aligned to the macro grid</b>: {@code WALL} cells
+ * become the chosen wall material, {@code OPEN} cells the chosen floor, and
+ * {@code SKIP} cells are left untouched.
  *
  * <p>Serialized as KV: a {@code template} header then one {@code row} per line,
  * each cell a char — {@code #} wall, {@code .} open, {@code _} skip.
@@ -26,19 +27,43 @@ public final class Template {
   public static final byte OPEN = 2;
 
   public String name;
-  public int width;
-  public int height;
+  public int width;   // micro cells (multiple of MACRO)
+  public int height;  // micro cells (multiple of MACRO)
   public byte[][] cells; // [x][y]
 
-  public Template(String name, int width, int height) {
+  /** create a template {@code macroW}×{@code macroH} macro cells in size. */
+  public Template(String name, int macroW, int macroH) {
     this.name = name;
-    this.width = Math.max(1, width);
-    this.height = Math.max(1, height);
-    this.cells = new byte[this.width][this.height];
+    this.width = Math.max(1, macroW) * Dungeon.MACRO;
+    this.height = Math.max(1, macroH) * Dungeon.MACRO;
+    this.cells = new byte[width][height];
+  }
+
+  public int macroW() {
+    return width / Dungeon.MACRO;
+  }
+
+  public int macroH() {
+    return height / Dungeon.MACRO;
   }
 
   public boolean inBounds(int x, int y) {
     return x >= 0 && y >= 0 && x < width && y < height;
+  }
+
+  /** resize to {@code macroW}×{@code macroH} macro cells, preserving overlap. */
+  public void resizeMacro(int macroW, int macroH) {
+    int nw = Math.max(1, macroW) * Dungeon.MACRO;
+    int nh = Math.max(1, macroH) * Dungeon.MACRO;
+    byte[][] grid = new byte[nw][nh];
+    for (int x = 0; x < nw; x++) {
+      for (int y = 0; y < nh; y++) {
+        grid[x][y] = inBounds(x, y) ? cells[x][y] : SKIP;
+      }
+    }
+    cells = grid;
+    width = nw;
+    height = nh;
   }
 
   private static char toChar(byte v) {
@@ -69,12 +94,10 @@ public final class Template {
 
   public static Template load(File file) throws Exception {
     if (!file.exists() || file.length() == 0) {
-      Template t = new Template(stripExt(file.getName()), 7, 7);
-      return t;
+      return new Template(stripExt(file.getName()), 1, 1);
     }
-    Template t = new Template(stripExt(file.getName()), 7, 7);
+    Template t = new Template(stripExt(file.getName()), 1, 1);
     boolean sized = false;
-    List<String> rows = new ArrayList<>();
     for (String line : Files.readAllLines(file.toPath())) {
       KV kv = KV.parse(line);
       if (kv == null) {
@@ -82,9 +105,11 @@ public final class Template {
       }
       if (kv.verb.equals("template")) {
         t.name = kv.get("name", t.name);
-        t.width = Math.max(1, kv.getInt("width", 7));
-        t.height = Math.max(1, kv.getInt("height", 7));
-        t.cells = new byte[t.width][t.height];
+        int w = Dungeon.snap5(kv.getInt("width", 5));
+        int h = Dungeon.snap5(kv.getInt("height", 5));
+        t.width = w;
+        t.height = h;
+        t.cells = new byte[w][h];
         sized = true;
       } else if (kv.verb.equals("row") && sized) {
         int y = kv.getInt("y", -1);
@@ -104,70 +129,55 @@ public final class Template {
     return dot > 0 ? n.substring(0, dot) : n;
   }
 
-  // ----- built-in stamps ------------------------------------------------------
+  // ----- built-in room stamps (macro-aligned) ---------------------------------
 
-  /** the shipped library of drawing stamps (used alongside project .template files). */
   public static List<Template> builtins() {
     List<Template> out = new ArrayList<>();
-    out.add(fill("Open room 5×5", 5, 5, OPEN));
-    out.add(fill("Pillar 1×1", 1, 1, WALL));
-    out.add(hollow("Walled room 7×7", 7, 7));
-    out.add(fill("Corridor 5×1", 5, 1, OPEN));
-    out.add(fill("Corridor 1×5", 1, 5, OPEN));
-    out.add(cross("Cross 5×5", 5));
-    out.add(disc("Disc 7×7", 7));
-    out.add(diagonal("Diagonal wall 5×5", 5));
+    out.add(fill("Room 1×1", 1, 1, OPEN));
+    out.add(fill("Room 2×2", 2, 2, OPEN));
+    out.add(hall("Hall 2×1", 2, 1));
+    out.add(hall("Hall 1×2", 1, 2));
+    out.add(walled("Walled room 2×2", 2, 2));
+    out.add(pillar("Pillar room 1×1", 1, 1));
+    out.add(diagonal("Diagonal 1×1", 1));
     return out;
   }
 
-  private static Template fill(String name, int w, int h, byte v) {
-    Template t = new Template(name, w, h);
-    for (int x = 0; x < w; x++) {
-      for (int y = 0; y < h; y++) {
+  private static Template fill(String name, int mw, int mh, byte v) {
+    Template t = new Template(name, mw, mh);
+    for (int x = 0; x < t.width; x++) {
+      for (int y = 0; y < t.height; y++) {
         t.cells[x][y] = v;
       }
     }
     return t;
   }
 
-  private static Template hollow(String name, int w, int h) {
-    Template t = new Template(name, w, h);
-    for (int x = 0; x < w; x++) {
-      for (int y = 0; y < h; y++) {
-        boolean edge = x == 0 || y == 0 || x == w - 1 || y == h - 1;
+  private static Template hall(String name, int mw, int mh) {
+    return fill(name, mw, mh, OPEN);
+  }
+
+  private static Template walled(String name, int mw, int mh) {
+    Template t = new Template(name, mw, mh);
+    for (int x = 0; x < t.width; x++) {
+      for (int y = 0; y < t.height; y++) {
+        boolean edge = x == 0 || y == 0 || x == t.width - 1 || y == t.height - 1;
         t.cells[x][y] = edge ? WALL : OPEN;
       }
     }
     return t;
   }
 
-  private static Template cross(String name, int n) {
-    Template t = new Template(name, n, n);
-    int mid = n / 2;
-    for (int x = 0; x < n; x++) {
-      for (int y = 0; y < n; y++) {
-        t.cells[x][y] = (x == mid || y == mid) ? OPEN : SKIP;
-      }
-    }
+  private static Template pillar(String name, int mw, int mh) {
+    Template t = fill(name, mw, mh, OPEN);
+    t.cells[t.width / 2][t.height / 2] = WALL;
     return t;
   }
 
-  private static Template disc(String name, int n) {
-    Template t = new Template(name, n, n);
-    double c = (n - 1) / 2.0;
-    double r = n / 2.0;
-    for (int x = 0; x < n; x++) {
-      for (int y = 0; y < n; y++) {
-        t.cells[x][y] = Math.hypot(x - c, y - c) <= r ? OPEN : SKIP;
-      }
-    }
-    return t;
-  }
-
-  private static Template diagonal(String name, int n) {
-    Template t = new Template(name, n, n);
-    for (int x = 0; x < n; x++) {
-      for (int y = 0; y < n; y++) {
+  private static Template diagonal(String name, int m) {
+    Template t = new Template(name, m, m);
+    for (int x = 0; x < t.width; x++) {
+      for (int y = 0; y < t.height; y++) {
         t.cells[x][y] = (x == y) ? WALL : SKIP;
       }
     }

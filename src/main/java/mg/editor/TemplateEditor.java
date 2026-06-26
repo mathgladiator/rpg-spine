@@ -52,6 +52,10 @@ public class TemplateEditor implements Editor {
   private final ComboBox<String> brushShape = new ComboBox<>();
   private final Spinner<Integer> brushSize = new Spinner<>(1, 9, 1);
 
+  // brush hover preview
+  private boolean hovering;
+  private int hoverX, hoverY;
+
   public TemplateEditor(File file, Label status) throws Exception {
     this.file = file;
     this.status = status;
@@ -80,7 +84,9 @@ public class TemplateEditor implements Editor {
     tools.getChildren().add(resize);
 
     canvas.setOnMousePressed(e -> paintAt(e.getX(), e.getY()));
-    canvas.setOnMouseDragged(e -> paintAt(e.getX(), e.getY()));
+    canvas.setOnMouseDragged(e -> { hover(e.getX(), e.getY()); paintAt(e.getX(), e.getY()); });
+    canvas.setOnMouseMoved(e -> hover(e.getX(), e.getY()));
+    canvas.setOnMouseExited(e -> { if (hovering) { hovering = false; redraw(); } });
 
     root.setLeft(new ScrollPane(tools) {{ setFitToWidth(true); }});
     root.setCenter(new ScrollPane(canvas));
@@ -95,6 +101,13 @@ public class TemplateEditor implements Editor {
     }
     b.setOnAction(e -> { if (b.isSelected()) { paint = p; } else { b.setSelected(true); } });
     return b;
+  }
+
+  private void hover(double px, double py) {
+    hoverX = (int) (px / cellSize);
+    hoverY = (int) (py / cellSize);
+    hovering = true;
+    redraw();
   }
 
   private void paintAt(double px, double py) {
@@ -131,23 +144,15 @@ public class TemplateEditor implements Editor {
   }
 
   private void resize() {
-    TextInputDialog d = new TextInputDialog(template.width + "x" + template.height);
-    d.setHeaderText("Resize template (WxH, micro cells)");
+    TextInputDialog d = new TextInputDialog(template.macroW() + "x" + template.macroH());
+    d.setHeaderText("Resize room (WxH, in macro cells — 1 macro = 5×5 micro)");
     d.showAndWait().ifPresent(v -> {
       try {
         String[] p = v.toLowerCase().split("x");
-        int w = Integer.parseInt(p[0].strip());
-        int h = Integer.parseInt(p[1].strip());
-        if (w > 0 && h > 0 && w <= 64 && h <= 64) {
-          byte[][] grid = new byte[w][h];
-          for (int x = 0; x < w; x++) {
-            for (int y = 0; y < h; y++) {
-              grid[x][y] = template.inBounds(x, y) ? template.cells[x][y] : Template.SKIP;
-            }
-          }
-          template.cells = grid;
-          template.width = w;
-          template.height = h;
+        int mw = Integer.parseInt(p[0].strip());
+        int mh = Integer.parseInt(p[1].strip());
+        if (mw > 0 && mh > 0 && mw <= 16 && mh <= 16) {
+          template.resizeMacro(mw, mh);
           markDirty();
           redraw();
         }
@@ -192,8 +197,8 @@ public class TemplateEditor implements Editor {
     WallRenderer.boundary(g, Dungeon.Fill.DIAGONAL, cellSize, 0, 0, w, h, cells);
     g.setLineDashes();
 
-    // grid
-    g.setStroke(Color.rgb(0, 0, 0, 0.15));
+    // micro grid (thin) + macro grid (thick)
+    g.setStroke(Color.rgb(0, 0, 0, 0.13));
     g.setLineWidth(1);
     for (int x = 0; x <= w; x++) {
       g.strokeLine(x * cellSize + 0.5, 0, x * cellSize + 0.5, h * cellSize);
@@ -201,7 +206,51 @@ public class TemplateEditor implements Editor {
     for (int y = 0; y <= h; y++) {
       g.strokeLine(0, y * cellSize + 0.5, w * cellSize, y * cellSize + 0.5);
     }
-    status.setText("template " + template.name + " — " + w + "×" + h + (dirty ? " *" : ""));
+    g.setStroke(Color.rgb(0, 0, 0, 0.55));
+    g.setLineWidth(2.5);
+    int macro = mg.editor.dungeon.Dungeon.MACRO;
+    for (int x = 0; x <= template.macroW(); x++) {
+      g.strokeLine(x * macro * cellSize + 0.5, 0, x * macro * cellSize + 0.5, h * cellSize);
+    }
+    for (int y = 0; y <= template.macroH(); y++) {
+      g.strokeLine(0, y * macro * cellSize + 0.5, w * cellSize, y * macro * cellSize + 0.5);
+    }
+    drawBrushGhost(g);
+
+    status.setText("room " + template.name + " — " + template.macroW() + "×" + template.macroH()
+        + " macro (" + w + "×" + h + " micro)" + (dirty ? " *" : ""));
+  }
+
+  /** preview the brush footprint under the cursor, tinted by the active paint. */
+  private void drawBrushGhost(GraphicsContext g) {
+    if (!hovering) {
+      return;
+    }
+    int r = brushSize.getValue() / 2;
+    String shape = brushShape.getValue();
+    Color tint = switch (paint) {
+      case WALL -> WALLC;
+      case OPEN -> OPENC;
+      case SKIP -> Color.web("#d4d4d4");
+    };
+    g.setFill(Color.color(tint.getRed(), tint.getGreen(), tint.getBlue(), 0.5));
+    g.setStroke(Color.web("#1565c0"));
+    g.setLineWidth(1);
+    g.setLineDashes();
+    for (int dx = -r; dx <= r; dx++) {
+      for (int dy = -r; dy <= r; dy++) {
+        if (!inBrush(dx, dy, r, shape)) {
+          continue;
+        }
+        int x = hoverX + dx, y = hoverY + dy;
+        if (!template.inBounds(x, y)) {
+          continue;
+        }
+        double px = x * cellSize, py = y * cellSize;
+        g.fillRect(px, py, cellSize, cellSize);
+        g.strokeRect(px + 0.5, py + 0.5, cellSize - 1, cellSize - 1);
+      }
+    }
   }
 
   private static Label label(String t) {

@@ -135,7 +135,36 @@ only affects how round the silhouette looks, not connectivity.
   ignores it, which is why 5×5 regions connect to their neighbours naturally.
 - Ladders/holes/portals send the party to a named **target** (`FeatureType.TARGET`,
   any macro cell) **by id**, never by coordinates, so editing the map can't break a
-  link. `.template` files are reusable wall/open/skip stamps drawn with the same
-  renderer.
+  link.
+- `.template` files are **macro-sized rooms** (their micro dimensions are multiples
+  of 5; the editor sizes them in macro units) of wall/open/skip cells, drawn with
+  the same renderer and **stamped aligned to the macro grid** (origin snapped to a
+  macro boundary).
+
+## Regions — runtime-mutable rectangles (hidden doorways)
+
+A level may carry named **regions**: an axis-aligned micro-cell rectangle with an
+`on` material index, an `off` material index, and a boolean (default **off**).
+Toggling the boolean **repaints the rectangle's cells** to the on/off material —
+so a hidden doorway is just a region whose `off` is solid wall and `on` is open
+floor.
+
+This keeps the C engine trivial and **mutable at runtime**: store, per region,
+`{x, y, w, h, onIndex, offIndex, on}` and a name. Flipping `on` is a small loop
+that rewrites those cells in the occupancy grid; the ray caster then sees the new
+walls with no other change. The `name` lets game logic reference the boolean
+(e.g. a lever sets `regions["secret-door"].on = true`).
+
+Serialized as `region name=… x=… y=… w=… h=… on=<idx> off=<idx> state=<bool>`.
+
+## Doodads
+
+A micro cell may hold up to **three doodads** — small decorative/interactive
+objects, each `{id, dir}`. On placement the facing is **inferred**: the first
+<em>open</em> (floor) neighbour scanning **clockwise from north** (N, E, S, W), so
+a torch on a wall faces the corridor it borders; ties resolve to the earliest in
+that order, and a fully-walled cell defaults to N. The direction can be overridden
+in the inspector. Serialized as `doodad x=… y=… id=… dir=n|e|s|w`.
+
 - Keep this file in lockstep with `mg.editor.dungeon.WallRenderer` (shared by the
   dungeon and template editors) and the device renderer.

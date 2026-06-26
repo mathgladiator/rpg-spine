@@ -110,6 +110,43 @@ public class Dungeon {
     public String note = "";
   }
 
+  /**
+   * A named rectangular region with a runtime boolean (default off). Toggling it
+   * repaints its micro cells to the {@code on} or {@code off} palette material —
+   * the mechanism for hidden doorways: off = solid wall, on = open floor. The
+   * boolean is meant to be mutable at runtime in the C engine (flip → repaint the
+   * rect → the ray caster sees new occupancy), so it stays trivial to implement.
+   */
+  public static final class Region {
+    public String name = "region";
+    public int x;
+    public int y;
+    public int w;
+    public int h;
+    public int onIndex;   // palette material when on
+    public int offIndex;  // palette material when off
+    public boolean on = false;
+
+    /** the palette index this region currently paints. */
+    public int currentIndex() {
+      return on ? onIndex : offIndex;
+    }
+  }
+
+  /** a cardinal facing, listed clockwise from north (the inference scan order). */
+  public enum Dir { N, E, S, W }
+
+  /** a small decorative/interactive object on a micro cell, facing {@link #dir}. */
+  public static final class Doodad {
+    public int x;
+    public int y;
+    public String id = "doodad";
+    public Dir dir = Dir.N;
+  }
+
+  /** the maximum number of doodads a single micro cell may hold. */
+  public static final int MAX_DOODADS = 3;
+
   /** a single monster placed at micro cell (x,y); its size lives in its .monster file. */
   public static final class MonsterPlacement {
     public String monsterId = "";
@@ -126,6 +163,19 @@ public class Dungeon {
     public Fill[][] macroFill; // wall algorithm per macro cell, [mx][my]
     public final List<Feature> features = new ArrayList<>();
     public final List<MonsterPlacement> monsters = new ArrayList<>();
+    public final List<Region> regions = new ArrayList<>();
+    public final List<Doodad> doodads = new ArrayList<>();
+
+    /** doodads sitting on micro cell (x,y). */
+    public List<Doodad> doodadsAt(int x, int y) {
+      List<Doodad> out = new ArrayList<>(MAX_DOODADS);
+      for (Doodad d : doodads) {
+        if (d.x == x && d.y == y) {
+          out.add(d);
+        }
+      }
+      return out;
+    }
 
     public Level(String name, int width, int height, int fill) {
       this.name = name;
@@ -227,6 +277,24 @@ public class Dungeon {
     return 0;
   }
 
+  /**
+   * Infer a doodad's facing from its cell's neighbours: the first <em>open</em>
+   * (floor) neighbour scanning clockwise from north (N, E, S, W). So a doodad on a
+   * wall with a single adjacent floor faces that floor; with several, it picks the
+   * earliest in clockwise order. Defaults to {@link Dir#N} if fully walled in.
+   */
+  public Dir inferDir(Level lv, int x, int y) {
+    int[][] off = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}}; // N, E, S, W
+    Dir[] dirs = {Dir.N, Dir.E, Dir.S, Dir.W};
+    for (int i = 0; i < 4; i++) {
+      int nx = x + off[i][0], ny = y + off[i][1];
+      if (lv.inBounds(nx, ny) && !isWall(lv.cells[nx][ny])) {
+        return dirs[i];
+      }
+    }
+    return Dir.N;
+  }
+
   /** occupancy with out-of-bounds treated as solid rock — the renderer's wall field. */
   public boolean occupied(Level lv, int x, int y) {
     if (!lv.inBounds(x, y)) {
@@ -312,6 +380,18 @@ public class Dungeon {
       for (MonsterPlacement mp : lv.monsters) {
         sb.append("mon id=").append(KV.q(mp.monsterId))
             .append(" x=").append(mp.x).append(" y=").append(mp.y).append('\n');
+      }
+      for (Region rg : lv.regions) {
+        sb.append("region name=").append(KV.q(rg.name))
+            .append(" x=").append(rg.x).append(" y=").append(rg.y)
+            .append(" w=").append(rg.w).append(" h=").append(rg.h)
+            .append(" on=").append(rg.onIndex).append(" off=").append(rg.offIndex)
+            .append(" state=").append(rg.on).append('\n');
+      }
+      for (Doodad dd : lv.doodads) {
+        sb.append("doodad x=").append(dd.x).append(" y=").append(dd.y)
+            .append(" id=").append(KV.q(dd.id))
+            .append(" dir=").append(dd.dir.name().toLowerCase()).append('\n');
       }
     }
     return sb.toString();
@@ -421,6 +501,36 @@ public class Dungeon {
           mp.x = kv.getInt("x", 0);
           mp.y = kv.getInt("y", 0);
           cur.monsters.add(mp);
+        }
+        case "region" -> {
+          if (cur == null) {
+            break;
+          }
+          Region rg = new Region();
+          rg.name = kv.get("name", "region");
+          rg.x = kv.getInt("x", 0);
+          rg.y = kv.getInt("y", 0);
+          rg.w = kv.getInt("w", 1);
+          rg.h = kv.getInt("h", 1);
+          rg.onIndex = kv.getInt("on", d.defaultFloorIndex());
+          rg.offIndex = kv.getInt("off", d.defaultWallIndex());
+          rg.on = kv.getBool("state", false);
+          cur.regions.add(rg);
+        }
+        case "doodad" -> {
+          if (cur == null) {
+            break;
+          }
+          Doodad dd = new Doodad();
+          dd.x = kv.getInt("x", 0);
+          dd.y = kv.getInt("y", 0);
+          dd.id = kv.get("id", "doodad");
+          try {
+            dd.dir = Dir.valueOf(kv.get("dir", "n").toUpperCase());
+          } catch (Exception e) {
+            dd.dir = Dir.N;
+          }
+          cur.doodads.add(dd);
         }
         default -> { /* ignore unknown verbs for forward-compat */ }
       }

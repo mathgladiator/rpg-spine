@@ -291,11 +291,17 @@ editors and live Meshy calls have not been smoke-tested in a running app.
   weight ignored) — all in `dungeon.WallRenderer` (shared with the C ray caster;
   **no colour blending** — DIAGONAL takes the majority material per contour cell).
   The editor adds a brush (shape + size), a
-  line tool with live preview, and stampable `Template`s (`dungeon.Template`,
-  built-ins + project `.template` files) previewed under the cursor. Features
+  line tool with live preview, and stampable `Template`s (`dungeon.Template`) —
+  **macro-sized rooms** (built-ins + project `.template` files) previewed under the
+  cursor and **stamped aligned to the macro grid**. Features
   (ladder/hole/portal/**target**) anchor to macro centers; ladders/holes/portals
   reference a named `TARGET` **by id**, not coordinates. Monsters (size 1–5) sit on
   micro cells and are validated by the asset audit against project `.monster` ids.
+  **Regions** (`dungeon.Region`) are named rectangles with on/off material indices
+  and a default-off boolean; toggling repaints the rect (hidden doorways) and the
+  boolean is meant to be flipped at runtime in C. A micro cell may also hold up to
+  three **doodads** (`dungeon.Doodad`, `{id, dir}`); placing one infers the facing
+  from the first open neighbour clockwise from north (`Dungeon.inferDir`).
 - `documents/AI.GEN.md` — options analysis for the image-gen backend (Meshy ≈
   Google nano-banana; PixelLab/Retro Diffusion for native sprites; FLUX/Gemini
   direct), and the recommended `ImageGen` provider abstraction.

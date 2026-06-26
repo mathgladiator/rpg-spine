@@ -12,30 +12,35 @@ import org.junit.Test;
 public class TemplateTests {
 
   @Test
-  public void builtinsExist() {
+  public void builtinsExistAndAreMacroAligned() {
     assertFalse(Template.builtins().isEmpty());
+    for (Template t : Template.builtins()) {
+      assertEquals(t.name + " width macro-aligned", 0, t.width % 5);
+      assertEquals(t.name + " height macro-aligned", 0, t.height % 5);
+    }
   }
 
   @Test
-  public void triStateRoundTrip() throws Exception {
+  public void macroSizedRoundTrip() throws Exception {
     File f = File.createTempFile("stamp", ".template");
     f.deleteOnExit();
 
-    Template t = new Template("ledge", 4, 3);
+    Template t = new Template("ledge", 2, 1); // 2×1 macro = 10×5 micro
+    assertEquals(10, t.width);
+    assertEquals(5, t.height);
+    assertEquals(2, t.macroW());
     t.cells[0][0] = Template.WALL;
-    t.cells[1][1] = Template.OPEN;
-    t.cells[2][2] = Template.SKIP; // default, but explicit
-    t.cells[3][0] = Template.WALL;
+    t.cells[5][2] = Template.OPEN;
+    t.cells[9][4] = Template.WALL;
     t.save(f);
 
     Template back = Template.load(f);
     assertEquals("ledge", back.name);
-    assertEquals(4, back.width);
-    assertEquals(3, back.height);
+    assertEquals(10, back.width);
+    assertEquals(5, back.height);
     assertEquals(Template.WALL, back.cells[0][0]);
-    assertEquals(Template.OPEN, back.cells[1][1]);
-    assertEquals(Template.SKIP, back.cells[2][2]);
-    assertEquals(Template.WALL, back.cells[3][0]);
+    assertEquals(Template.OPEN, back.cells[5][2]);
+    assertEquals(Template.WALL, back.cells[9][4]);
     Files.deleteIfExists(f.toPath());
   }
 

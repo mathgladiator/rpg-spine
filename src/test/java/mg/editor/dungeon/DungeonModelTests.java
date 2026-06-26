@@ -107,6 +107,82 @@ public class DungeonModelTests {
   }
 
   @Test
+  public void doodadDirectionInference() {
+    Dungeon d = Dungeon.blank();
+    Dungeon.Level lv = d.levels.get(0); // all solid wall
+    int floor = d.defaultFloorIndex();
+    int x = 5, y = 5;
+
+    // only east is open → faces east
+    lv.cells[x + 1][y] = floor;
+    assertEquals(Dungeon.Dir.E, d.inferDir(lv, x, y));
+
+    // open north too → north wins (clockwise from N)
+    lv.cells[x][y - 1] = floor;
+    assertEquals(Dungeon.Dir.N, d.inferDir(lv, x, y));
+
+    // fully walled → default north
+    assertEquals(Dungeon.Dir.N, d.inferDir(lv, 1, 1));
+  }
+
+  @Test
+  public void doodadsRoundTripAndCapAtThree() throws Exception {
+    File f = File.createTempFile("doodad", ".dungeon");
+    f.deleteOnExit();
+    Dungeon d = Dungeon.blank();
+    Dungeon.Level lv = d.levels.get(0);
+    for (int i = 0; i < 3; i++) {
+      Dungeon.Doodad dd = new Dungeon.Doodad();
+      dd.x = 4;
+      dd.y = 6;
+      dd.id = "torch" + i;
+      dd.dir = Dungeon.Dir.values()[i];
+      lv.doodads.add(dd);
+    }
+    assertEquals(3, lv.doodadsAt(4, 6).size());
+    d.save(f);
+
+    Dungeon.Level bl = Dungeon.load(f).levels.get(0);
+    assertEquals(3, bl.doodads.size());
+    assertEquals(3, bl.doodadsAt(4, 6).size());
+    assertEquals("torch0", bl.doodadsAt(4, 6).get(0).id);
+    assertEquals(Dungeon.Dir.E, bl.doodadsAt(4, 6).get(1).dir);
+    assertEquals(Dungeon.MAX_DOODADS, 3);
+    Files.deleteIfExists(f.toPath());
+  }
+
+  @Test
+  public void regionRoundTrips() throws Exception {
+    File f = File.createTempFile("region", ".dungeon");
+    f.deleteOnExit();
+    Dungeon d = Dungeon.blank();
+    Dungeon.Level lv = d.levels.get(0);
+    Dungeon.Region rg = new Dungeon.Region();
+    rg.name = "secret-door";
+    rg.x = 2;
+    rg.y = 3;
+    rg.w = 4;
+    rg.h = 1;
+    rg.onIndex = d.defaultFloorIndex();
+    rg.offIndex = d.defaultWallIndex();
+    rg.on = false;
+    lv.regions.add(rg);
+    d.save(f);
+
+    Dungeon.Level bl = Dungeon.load(f).levels.get(0);
+    assertEquals(1, bl.regions.size());
+    Dungeon.Region br = bl.regions.get(0);
+    assertEquals("secret-door", br.name);
+    assertEquals(2, br.x);
+    assertEquals(4, br.w);
+    assertEquals(d.defaultFloorIndex(), br.onIndex);
+    assertEquals(d.defaultWallIndex(), br.offIndex);
+    assertFalse(br.on);
+    assertEquals(d.defaultWallIndex(), br.currentIndex()); // off → wall
+    Files.deleteIfExists(f.toPath());
+  }
+
+  @Test
   public void macroFillRoundTrips() throws Exception {
     File f = File.createTempFile("macrofill", ".dungeon");
     f.deleteOnExit();

@@ -31,6 +31,8 @@ import javafx.scene.text.Font;
 import javafx.scene.text.FontWeight;
 import javafx.scene.text.TextAlignment;
 import mg.editor.dungeon.Dungeon;
+import mg.editor.dungeon.Dungeon.Dir;
+import mg.editor.dungeon.Dungeon.Doodad;
 import mg.editor.dungeon.Dungeon.Feature;
 import mg.editor.dungeon.Dungeon.FeatureType;
 import mg.editor.dungeon.Dungeon.Fill;
@@ -66,7 +68,7 @@ public class DungeonEditor implements Editor {
   private static final Color ROCK = Color.web("#5a5a5a");
   private static final Color PURPLE = Color.web("#9c27b0");
 
-  private enum Tool { SELECT, PAINT, ERASE, LINE, FEATURE, MONSTER, TEMPLATE }
+  private enum Tool { SELECT, PAINT, ERASE, LINE, FEATURE, MONSTER, TEMPLATE, REGION, DOODAD }
 
   private final File file;
   private final Label status;
@@ -95,12 +97,19 @@ public class DungeonEditor implements Editor {
   private boolean hovering;
   private int hoverX, hoverY;
 
+  // region drag + selection
+  private boolean regionActive;
+  private int rx0, ry0, rx1, ry1;
+  private final ListView<Dungeon.Region> regionList = new ListView<>();
+  private Dungeon.Region selectedRegion;
+
   // palette
   private final ListView<Material> paletteList = new ListView<>();
 
   // placement pickers
   private final ComboBox<FeatureType> featurePick = new ComboBox<>();
   private final ComboBox<String> monsterPick = new ComboBox<>();
+  private final TextField doodadId = new TextField("torch");
   private final Map<String, Integer> monsterSizes = new TreeMap<>();
 
   private final ComboBox<String> levelPick = new ComboBox<>();
@@ -137,6 +146,8 @@ public class DungeonEditor implements Editor {
     box.getChildren().add(toolButton(tg, Tool.TEMPLATE, "Stamp template"));
     box.getChildren().add(toolButton(tg, Tool.FEATURE, "Place feature (macro)"));
     box.getChildren().add(toolButton(tg, Tool.MONSTER, "Place monster (micro)"));
+    box.getChildren().add(toolButton(tg, Tool.DOODAD, "Place doodad (micro)"));
+    box.getChildren().add(toolButton(tg, Tool.REGION, "Draw region (drag)"));
 
     brushShape.getItems().setAll("square", "circle", "diamond");
     brushShape.getSelectionModel().selectFirst();
@@ -179,6 +190,7 @@ public class DungeonEditor implements Editor {
     box.getChildren().add(labeled("Feature type", featurePick));
     refreshMonsterPick();
     box.getChildren().add(labeled("Monster", monsterPick));
+    box.getChildren().add(labeled("Doodad id (direction auto-inferred)", doodadId));
     discoverTemplates();
     templatePick.setCellFactory(lv -> templateCell());
     templatePick.setButtonCell(templateCell());
@@ -279,6 +291,8 @@ public class DungeonEditor implements Editor {
       if (idx >= 0 && idx < dungeon.levels.size() && idx != levelIndex) {
         levelIndex = idx;
         selX = selY = -1;
+        selectedRegion = null;
+        refreshRegionList();
         rebuildProps();
         redraw();
       }
@@ -308,11 +322,101 @@ public class DungeonEditor implements Editor {
     rebuildProps();
     TitledPane props = new TitledPane("Inspector", new ScrollPane(propsBox) {{ setFitToWidth(true); }});
     props.setCollapsible(false);
-    VBox box = new VBox(8, props);
+    VBox box = new VBox(8, props, buildRegionsPane());
     box.setPadding(new Insets(10));
     box.setPrefWidth(300);
     VBox.setVgrow(props, Priority.ALWAYS);
     return box;
+  }
+
+  private Node buildRegionsPane() {
+    refreshRegionList();
+    regionList.setPrefHeight(110);
+    regionList.setCellFactory(lv -> new ListCell<>() {
+      @Override protected void updateItem(Dungeon.Region r, boolean empty) {
+        super.updateItem(r, empty);
+        setText(empty || r == null ? null : r.name + (r.on ? "  [ON]" : "  [off]")
+            + "  " + r.w + "×" + r.h);
+      }
+    });
+
+    TextField name = new TextField();
+    ComboBox<Material> onMat = new ComboBox<>();
+    onMat.getItems().setAll(dungeon.palette);
+    onMat.setButtonCell(materialCell());
+    onMat.setCellFactory(c -> materialCell());
+    ComboBox<Material> offMat = new ComboBox<>();
+    offMat.getItems().setAll(dungeon.palette);
+    offMat.setButtonCell(materialCell());
+    offMat.setCellFactory(c -> materialCell());
+    javafx.scene.control.CheckBox onCheck = new javafx.scene.control.CheckBox("on (paints the region)");
+
+    name.textProperty().addListener((o, a, b) -> {
+      if (!populating && selectedRegion != null) { selectedRegion.name = b; markDirty(); regionList.refresh(); }
+    });
+    onMat.valueProperty().addListener((o, a, b) -> {
+      if (!populating && selectedRegion != null && b != null) {
+        selectedRegion.onIndex = dungeon.palette.indexOf(b);
+        if (selectedRegion.on) { paintRegion(level(), selectedRegion); }
+        markDirty();
+        redraw();
+      }
+    });
+    offMat.valueProperty().addListener((o, a, b) -> {
+      if (!populating && selectedRegion != null && b != null) {
+        selectedRegion.offIndex = dungeon.palette.indexOf(b);
+        if (!selectedRegion.on) { paintRegion(level(), selectedRegion); }
+        markDirty();
+        redraw();
+      }
+    });
+    onCheck.setOnAction(e -> {
+      if (selectedRegion != null) {
+        selectedRegion.on = onCheck.isSelected();
+        paintRegion(level(), selectedRegion);
+        markDirty();
+        regionList.refresh();
+        redraw();
+      }
+    });
+
+    regionList.getSelectionModel().selectedItemProperty().addListener((o, a, r) -> {
+      selectedRegion = r;
+      populating = true;
+      if (r != null) {
+        name.setText(r.name);
+        onMat.setValue(dungeon.material(r.onIndex));
+        offMat.setValue(dungeon.material(r.offIndex));
+        onCheck.setSelected(r.on);
+      }
+      populating = false;
+      redraw();
+    });
+
+    Button del = new Button("Delete");
+    del.setOnAction(e -> {
+      if (selectedRegion != null) {
+        level().regions.remove(selectedRegion);
+        selectedRegion = null;
+        refreshRegionList();
+        markDirty();
+        redraw();
+      }
+    });
+
+    GridPane form = new GridPane();
+    form.setHgap(6);
+    form.setVgap(4);
+    form.addRow(0, new Label("name"), name);
+    form.addRow(1, new Label("on"), onMat);
+    form.addRow(2, new Label("off"), offMat);
+    VBox box = new VBox(6, regionList, onCheck, form, new HBox(6, del));
+    box.setPadding(new Insets(6));
+    return new TitledPane("Regions (toggle = hidden doorway)", box);
+  }
+
+  private void refreshRegionList() {
+    regionList.getItems().setAll(level().regions);
   }
 
   // ------------------------------------------------------------- project scan
@@ -428,7 +532,9 @@ public class DungeonEditor implements Editor {
       case LINE -> { lineActive = true; lx0 = lx1 = x; ly0 = ly1 = y; redraw(); }
       case FEATURE -> { placeFeature(lv, x / MACRO, y / MACRO); afterEdit(x, y); }
       case MONSTER -> { placeMonster(lv, x, y); afterEdit(x, y); }
+      case DOODAD -> { placeDoodad(lv, x, y); afterEdit(x, y); }
       case TEMPLATE -> { stampTemplate(lv, x, y); afterEdit(x, y); }
+      case REGION -> { regionActive = true; rx0 = rx1 = x; ry0 = ry1 = y; redraw(); }
     }
   }
 
@@ -445,6 +551,10 @@ public class DungeonEditor implements Editor {
       lx1 = clampX(x);
       ly1 = clampY(y);
       redraw();
+    } else if (tool == Tool.REGION && regionActive) {
+      rx1 = clampX(x);
+      ry1 = clampY(y);
+      redraw();
     }
   }
 
@@ -458,6 +568,56 @@ public class DungeonEditor implements Editor {
       markDirty();
       rebuildProps();
       redraw();
+    } else if (tool == Tool.REGION && regionActive) {
+      regionActive = false;
+      createRegion();
+    }
+  }
+
+  private void createRegion() {
+    Level lv = level();
+    Dungeon.Region rg = new Dungeon.Region();
+    rg.x = Math.min(rx0, rx1);
+    rg.y = Math.min(ry0, ry1);
+    rg.w = Math.abs(rx1 - rx0) + 1;
+    rg.h = Math.abs(ry1 - ry0) + 1;
+    rg.name = uniqueRegionName(lv);
+    rg.onIndex = dungeon.defaultFloorIndex();
+    rg.offIndex = dungeon.defaultWallIndex();
+    rg.on = false; // default off
+    lv.regions.add(rg);
+    paintRegion(lv, rg); // paint it off
+    selectedRegion = rg;
+    refreshRegionList();
+    regionList.getSelectionModel().select(rg);
+    markDirty();
+    redraw();
+  }
+
+  private String uniqueRegionName(Level lv) {
+    java.util.Set<String> taken = new java.util.HashSet<>();
+    for (Dungeon.Region r : lv.regions) {
+      taken.add(r.name);
+    }
+    if (!taken.contains("region")) {
+      return "region";
+    }
+    int i = 2;
+    while (taken.contains("region" + i)) {
+      i++;
+    }
+    return "region" + i;
+  }
+
+  /** paint a region's rectangle with its current (on/off) material. */
+  private void paintRegion(Level lv, Dungeon.Region rg) {
+    int idx = rg.currentIndex();
+    for (int x = rg.x; x < rg.x + rg.w; x++) {
+      for (int y = rg.y; y < rg.y + rg.h; y++) {
+        if (lv.inBounds(x, y)) {
+          lv.cells[x][y] = idx;
+        }
+      }
     }
   }
 
@@ -556,12 +716,18 @@ public class DungeonEditor implements Editor {
     lv.monsters.add(mp);
   }
 
+  /** top-left micro origin for stamping, snapped so the room aligns to the macro grid. */
+  private int[] stampOrigin(int cx, int cy) {
+    return new int[] {(cx / MACRO) * MACRO, (cy / MACRO) * MACRO};
+  }
+
   private void stampTemplate(Level lv, int cx, int cy) {
     Template t = templatePick.getValue();
     if (t == null) {
       return;
     }
-    int ox = cx - t.width / 2, oy = cy - t.height / 2;
+    int[] o = stampOrigin(cx, cy);
+    int ox = o[0], oy = o[1];
     int wIdx = selectedWallIndex(), fIdx = selectedFloorIndex();
     for (int tx = 0; tx < t.width; tx++) {
       for (int ty = 0; ty < t.height; ty++) {
@@ -575,6 +741,19 @@ public class DungeonEditor implements Editor {
         }
       }
     }
+  }
+
+  private void placeDoodad(Level lv, int x, int y) {
+    if (lv.doodadsAt(x, y).size() >= Dungeon.MAX_DOODADS) {
+      return; // at most three per cell
+    }
+    String id = doodadId.getText() == null || doodadId.getText().isBlank() ? "doodad" : doodadId.getText().strip();
+    Doodad dd = new Doodad();
+    dd.x = x;
+    dd.y = y;
+    dd.id = id;
+    dd.dir = dungeon.inferDir(lv, x, y); // first open neighbour, clockwise from N
+    lv.doodads.add(dd);
   }
 
   private Feature featureAt(Level lv, int mx, int my) {
@@ -697,6 +876,26 @@ public class DungeonEditor implements Editor {
     if (!any) {
       propsBox.getChildren().add(new Label("(none — use Place monster)"));
     }
+
+    propsBox.getChildren().add(section("Doodads here (max " + Dungeon.MAX_DOODADS + ")"));
+    List<Doodad> here = lv.doodadsAt(selX, selY);
+    if (here.isEmpty()) {
+      propsBox.getChildren().add(new Label("(none — use Place doodad)"));
+    }
+    for (Doodad dd : here) {
+      TextField id = new TextField(dd.id);
+      id.setPrefWidth(110);
+      id.textProperty().addListener((o, a, b) -> { if (!populating) { dd.id = b; markDirty(); } });
+      ComboBox<Dir> dir = new ComboBox<>();
+      dir.getItems().setAll(Dir.values());
+      dir.setValue(dd.dir);
+      dir.valueProperty().addListener((o, a, b) -> { if (!populating && b != null) { dd.dir = b; markDirty(); redraw(); } });
+      Button rm = new Button("✕");
+      rm.setOnAction(e -> { lv.doodads.remove(dd); markDirty(); rebuildProps(); redraw(); });
+      HBox row = new HBox(6, id, dir, rm);
+      row.setAlignment(Pos.CENTER_LEFT);
+      propsBox.getChildren().add(row);
+    }
     populating = false;
   }
 
@@ -763,6 +962,8 @@ public class DungeonEditor implements Editor {
 
     drawFeatures(g, lv);
     drawMonsters(g, lv);
+    drawDoodads(g, lv);
+    drawRegions(g, lv);
     drawGhost(g, lv);
 
     if (lv.inBounds(selX, selY)) {
@@ -822,7 +1023,8 @@ public class DungeonEditor implements Editor {
       if (t == null) {
         return;
       }
-      int ox = hoverX - t.width / 2, oy = hoverY - t.height / 2;
+      int[] o = stampOrigin(hoverX, hoverY);
+      int ox = o[0], oy = o[1];
       Color wc = matColor(dungeon.material(selectedWallIndex()));
       Color fc = matColor(dungeon.material(selectedFloorIndex()));
       for (int tx = 0; tx < t.width; tx++) {
@@ -844,6 +1046,31 @@ public class DungeonEditor implements Editor {
       g.setLineWidth(1.5);
       g.strokeRect(Math.max(0, ox) * cellSize, Math.max(0, oy) * cellSize,
           t.width * cellSize, t.height * cellSize);
+    } else if (tool == Tool.REGION && regionActive) {
+      int x = Math.min(rx0, rx1), y = Math.min(ry0, ry1);
+      int rw = Math.abs(rx1 - rx0) + 1, rh = Math.abs(ry1 - ry0) + 1;
+      g.setFill(Color.color(0.94, 0.42, 0.0, 0.25));
+      g.fillRect(x * cellSize, y * cellSize, rw * cellSize, rh * cellSize);
+      g.setStroke(Color.web("#ef6c00"));
+      g.setLineWidth(2);
+      g.strokeRect(x * cellSize, y * cellSize, rw * cellSize, rh * cellSize);
+    }
+  }
+
+  private void drawRegions(GraphicsContext g, Level lv) {
+    g.setTextAlign(TextAlignment.LEFT);
+    g.setFont(Font.font(Math.max(9, cellSize * 0.6)));
+    for (Dungeon.Region r : lv.regions) {
+      double px = r.x * cellSize, py = r.y * cellSize;
+      double bw = r.w * cellSize, bh = r.h * cellSize;
+      Color c = r.on ? Color.web("#26a69a") : Color.web("#ef6c00");
+      g.setStroke(c);
+      g.setLineWidth(r == selectedRegion ? 3 : 1.5);
+      g.setLineDashes(5, 4);
+      g.strokeRect(px + 1, py + 1, bw - 2, bh - 2);
+      g.setLineDashes();
+      g.setFill(c);
+      g.fillText(r.name + (r.on ? " [ON]" : ""), px + 3, py + cellSize * 0.9);
     }
   }
 
@@ -914,6 +1141,43 @@ public class DungeonEditor implements Editor {
       g.fillText(mp.monsterId.isEmpty() ? "?" : mp.monsterId.substring(0, 1).toUpperCase(),
           px + box / 2, py + box / 2 + cellSize * 0.25);
     }
+  }
+
+  private void drawDoodads(GraphicsContext g, Level lv) {
+    java.util.Map<Long, Integer> slot = new java.util.HashMap<>();
+    double s = cellSize;
+    for (Doodad dd : lv.doodads) {
+      long key = ((long) dd.x << 20) | dd.y;
+      int idx = Math.min(2, slot.merge(key, 1, Integer::sum) - 1);
+      // always anchored at the micro-cell center; arrows point in the doodad's direction
+      double cx = dd.x * s + s / 2, cy = dd.y * s + s / 2;
+      double[] v = dirVec(dd.dir);
+      double len = s * 0.42 - idx * (s * 0.11); // shorten extras so stacked doodads stay visible
+      double ah = Math.max(3, s * 0.16);
+      double px = -v[1], py = v[0]; // perpendicular
+      double tipX = cx + v[0] * len, tipY = cy + v[1] * len;
+      double baseX = cx + v[0] * (len - ah), baseY = cy + v[1] * (len - ah);
+
+      double rr = Math.max(2, s * 0.12);
+      g.setFill(Color.web("#aeea00"));
+      g.fillOval(cx - rr, cy - rr, rr * 2, rr * 2);
+      g.setStroke(Color.web("#33691e"));
+      g.setLineWidth(Math.max(1.5, s * 0.09));
+      g.strokeLine(cx, cy, baseX, baseY);
+      g.setFill(Color.web("#33691e"));
+      g.fillPolygon(
+          new double[] {tipX, baseX + px * ah * 0.5, baseX - px * ah * 0.5},
+          new double[] {tipY, baseY + py * ah * 0.5, baseY - py * ah * 0.5}, 3);
+    }
+  }
+
+  private static double[] dirVec(Dir d) {
+    return switch (d) {
+      case N -> new double[] {0, -1};
+      case E -> new double[] {1, 0};
+      case S -> new double[] {0, 1};
+      case W -> new double[] {-1, 0};
+    };
   }
 
   private Color matColor(Material m) {
