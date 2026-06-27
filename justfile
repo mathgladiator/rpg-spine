@@ -8,3 +8,11 @@ demo: build
 # launch the JavaFX editor over the demo/ directory
 edit: build
     java -jar spine.jar --editor demo
+
+# generate C from the demo project into demo/gen/
+compile: build
+    java -jar spine.jar --compile demo --out gen
+
+# build, run codegen, and run the C runtime + generated round-trip tests
+ctest: build
+    runtime/test.sh

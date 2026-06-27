@@ -1,4 +1,6 @@
 target/
+# generated codegen output (the canonical copy is synced into hero/game/spine)
+demo/gen/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/

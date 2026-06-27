@@ -43,6 +43,20 @@
         <javafx.version>17.0.6</javafx.version>
     </properties>
     <build>
+        <!-- Bundle the hand-written C runtime (runtime/spine_runtime.{h,c}) into
+             the jar so mg.codegen.Compiler can emit it alongside generated code,
+             regardless of the working directory. Single source of truth: the C
+             unit test compiles the same files from runtime/. -->
+        <resources>
+            <resource>
+                <directory>runtime</directory>
+                <targetPath>runtime</targetPath>
+                <includes>
+                    <include>spine_runtime.h</include>
+                    <include>spine_runtime.c</include>
+                </includes>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

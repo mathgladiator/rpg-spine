@@ -22,6 +22,8 @@ public class Main {
     String output = null;
     String symbols = null;
     String editorDir = null;
+    String compileDir = null;
+    String outDir = null;
     for (int k = 0; k < args.length; k++) {
       String arg = args[k];
       if (k + 1 < args.length) {
@@ -38,7 +40,31 @@ public class Main {
         if ("--editor".equals(arg) || "-e".equals(arg)) {
           editorDir = args[k + 1];
         }
+        if ("--compile".equals(arg) || "-c".equals(arg)) {
+          compileDir = args[k + 1];
+        }
+        if ("--out".equals(arg)) {
+          outDir = args[k + 1];
+        }
       }
+    }
+
+    // The C code generator runs headless from the CLI: parse + validate the
+    // project's content and emit generated C into <project>/<outDir>. This is the
+    // primary way codegen is tested. Exit non-zero on any codegen error.
+    if (compileDir != null) {
+      File dir = new File(compileDir);
+      if (!dir.isDirectory()) {
+        System.err.println("--compile: not a directory: " + dir.getAbsolutePath());
+        System.exit(2);
+      }
+      mg.editor.ProjectSettings settings = mg.editor.ProjectSettings.load(dir);
+      if (outDir != null) {
+        settings.outputDir = outDir;
+      }
+      mg.codegen.Compiler.Result result =
+          mg.codegen.Compiler.run(dir, settings, System.out::println);
+      System.exit(result.ok() ? 0 : 1);
     }
 
     // The visual editor takes over the process when requested. It validates the
