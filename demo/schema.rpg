@@ -13,10 +13,12 @@ struct Character {
 1000: Character[] party;
 
 // effects a .story may invoke on-enter; each maps to a C
-// void effect_<name>(spine_t* doc, int param) at codegen.
-effect give_crown;
-effect mark_greedy;
-effect kill_player;
-effect resolve_vault;
+// void effect_<name>(SPINE* doc, int param) at codegen. The leading number is a
+// stable dispatch code: compiled stories store the code, so an effect may be
+// renamed without breaking already-compiled .storybin files.
+effect 1: give_crown;
+effect 2: mark_greedy;
+effect 3: kill_player;
+effect 4: resolve_vault;
 
-effect give_xp;
+effect 5: give_xp;

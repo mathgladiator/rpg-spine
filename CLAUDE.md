@@ -317,6 +317,15 @@ editors and live Meshy calls have not been smoke-tested in a running app.
 ## Docs map
 
 - `README.md` — vision + milestone roadmap + editor user guide.
+- `../CLAUDE.md` — the studio umbrella doc (rpg-spine + hero); the cross-repo map.
+- `documents/SAVE_FORMAT.md` — the **implemented** save bytecode (big-endian
+  mutation commands; `spine_load`/`spine_save`). Runtime in `runtime/`.
+- `documents/STORYBIN_FORMAT.md` — the **implemented** compiled `.story` (`.storybin`):
+  integer graph + interned strings + an embedded `.bwa` image bank; stable effect
+  dispatch codes. Java emitter `mg.codegen.Storybin`; C decoder `runtime/storybin.{h,c}`.
+- `runtime/` — the hand-written, unit-tested C the codegen ships: `spine_runtime`
+  (byte primitives), `bwa` (reusable image-bank codec), `storybin` (story decoder),
+  with `*_test.c` and `test.sh` (run via `just ctest`).
 - `documents/CODEGEN.md` — bake-vs-file analysis for Playdate map data and the
   recommended hybrid (typed header + bundle file + small SPINE overlay).
 - `documents/ASSETS.md` — `.monster` art requirements (two views, four

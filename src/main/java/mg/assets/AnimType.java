@@ -28,7 +28,10 @@ public enum AnimType {
   ITEM_ICON_LARGE(40),
   ITEM_ICON_MEDIUM(41),
   ITEM_ICON_SMALL(42),
-  ITEM_USAGE(43);
+  ITEM_USAGE(43),
+
+  /** a full-screen story image (beat scene or outcome reward); one cell today. */
+  STORY_SCENE(50);
 
   /** the 16-bit code written to disk. */
   public final int code;

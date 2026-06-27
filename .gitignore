@@ -1,6 +1,8 @@
 target/
 # generated codegen output (the canonical copy is synced into hero/game/spine)
 demo/gen/
+# compiled runtime assets (.storybin); synced into hero/assets
+demo/assets/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/

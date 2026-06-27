@@ -24,6 +24,7 @@ public class Main {
     String editorDir = null;
     String compileDir = null;
     String outDir = null;
+    String assetsOut = null;
     for (int k = 0; k < args.length; k++) {
       String arg = args[k];
       if (k + 1 < args.length) {
@@ -46,6 +47,9 @@ public class Main {
         if ("--out".equals(arg)) {
           outDir = args[k + 1];
         }
+        if ("--assets".equals(arg)) {
+          assetsOut = args[k + 1];
+        }
       }
     }
 
@@ -61,6 +65,9 @@ public class Main {
       mg.editor.ProjectSettings settings = mg.editor.ProjectSettings.load(dir);
       if (outDir != null) {
         settings.outputDir = outDir;
+      }
+      if (assetsOut != null) {
+        settings.assetsDir = assetsOut;
       }
       mg.codegen.Compiler.Result result =
           mg.codegen.Compiler.run(dir, settings, System.out::println);

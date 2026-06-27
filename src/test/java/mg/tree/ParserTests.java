@@ -10,8 +10,12 @@ public class ParserTests {
   public void test_effects() throws SpineLangException {
     Root root = new Root();
     Parser.merge_string(root, "test",
-        "10: long score; effect kill_player; effect grant_gold; struct S { 1: int a; }");
-    Assert.assertEquals(java.util.List.of("kill_player", "grant_gold"), root.effects);
+        "10: long score; effect 7: kill_player; effect 9: grant_gold; struct S { 1: int a; }");
+    Assert.assertEquals(2, root.effects.size());
+    Assert.assertEquals(7, root.effects.get(0).code);
+    Assert.assertEquals("kill_player", root.effects.get(0).name);
+    Assert.assertEquals(9, root.effects.get(1).code);
+    Assert.assertEquals("grant_gold", root.effects.get(1).name);
     Assert.assertEquals(1, root.fields.size());
     Assert.assertEquals(1, root.structs.size());
   }

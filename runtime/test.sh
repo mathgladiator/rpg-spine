@@ -26,7 +26,7 @@ if [[ ! -f "$JAR" ]]; then
 fi
 
 echo "==> codegen over demo/"
-java -jar "$JAR" --compile "$ROOT/demo" --out gen
+java -jar "$JAR" --compile "$ROOT/demo" --out gen --assets assets
 
 echo "==> runtime unit tests"
 "$CC" "${CFLAGS[@]}" "$RT/spine_runtime.c" "$RT/spine_runtime_test.c" -o "$TMP/rt"
@@ -37,5 +37,14 @@ echo "==> generated load/save round-trip (demo schema)"
     "$GEN/spine.gen.c" "$GEN/spine_runtime.c" "$RT/spine_gen_roundtrip_test.c" \
     -o "$TMP/gen"
 "$TMP/gen"
+
+echo "==> bwa codec unit tests"
+"$CC" "${CFLAGS[@]}" "$RT/bwa.c" "$RT/spine_runtime.c" "$RT/bwa_test.c" -o "$TMP/bwa"
+"$TMP/bwa"
+
+echo "==> storybin round-trip (demo vault.story -> .storybin -> decode)"
+"$CC" "${CFLAGS[@]}" "$RT/storybin.c" "$RT/bwa.c" "$RT/spine_runtime.c" \
+    "$RT/storybin_roundtrip_test.c" -o "$TMP/storybin"
+"$TMP/storybin" "$ROOT/demo/assets/stories/vault.storybin"
 
 echo "==> all C codegen tests passed"

@@ -7,13 +7,14 @@ public class Root {
   public final ArrayList<Field> fields;
   public final ArrayList<Struct> structs;
   /**
-   * Named effects declared with {@code effect <name>;}. Each registers a side
-   * effect a {@code .story} (or other content) may invoke; at codegen it maps to a
-   * C function taking the whole document plus an integer parameter
-   * ({@code void effect_<name>(spine_t* doc, int param)}). See
-   * {@code documents/story.vm.md}.
+   * Named effects declared with {@code effect <code>: <name>;}. Each registers a
+   * side effect a {@code .story} (or other content) may invoke; the {@code code} is
+   * the stable dispatch id compiled content stores (so effects can be renamed). At
+   * codegen each maps to {@code void effect_<name>(SPINE* doc, int param)}, reached
+   * via a generated {@code story_effect} dispatch keyed by the code. See
+   * {@code documents/story.vm.md} and {@code documents/STORYBIN_FORMAT.md}.
    */
-  public final ArrayList<String> effects;
+  public final ArrayList<Effect> effects;
 
   public Root() {
     this.fields = new ArrayList<>();

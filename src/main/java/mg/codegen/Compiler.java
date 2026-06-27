@@ -6,6 +6,7 @@ import mg.editor.dungeon.Dungeon;
 import mg.editor.item.Item;
 import mg.editor.monster.Monster;
 import mg.editor.story.Story;
+import mg.tree.Effect;
 import mg.tree.Field;
 import mg.tree.Parser;
 import mg.tree.Root;
@@ -104,22 +105,14 @@ public final class Compiler {
     say.accept("schema: " + schema.fields.size() + " root field(s), " + schema.structs.size()
         + " struct(s), " + schema.effects.size() + " effect(s)");
 
-    // ---- validate content (loads + lints) ----
+    // ---- validate content (loads + lints; undeclared effects are caught as a
+    //      hard error later when the story is compiled to .storybin) ----
     for (File f : stories) {
       try {
         Story s = Story.load(f);
         for (String problem : s.lint()) {
           r.warnings++;
           say.accept("WARN: " + rel(root, f) + ": " + problem);
-        }
-        for (Story.Node n : s.nodes) {
-          for (Story.Effect e : n.onEnter) {
-            if (!e.name.isBlank() && !schema.effects.contains(e.name)) {
-              r.warnings++;
-              say.accept("WARN: " + rel(root, f) + ": node " + n.id
-                  + " uses effect '" + e.name + "' not declared in any .rpg");
-            }
-          }
         }
       } catch (Exception ex) {
         r.errors++;
@@ -163,11 +156,45 @@ public final class Compiler {
     try {
       writeFile(out, "spine.gen.h", emitHeader(model), r, say, dir);
       writeFile(out, "spine.gen.c", emitSource(model), r, say, dir);
+      writeFile(out, "spine_effects.gen.c", emitEffects(model), r, say, dir);
       copyResource("/runtime/spine_runtime.h", new File(out, "spine_runtime.h"), r, say, dir);
       copyResource("/runtime/spine_runtime.c", new File(out, "spine_runtime.c"), r, say, dir);
+      copyResource("/runtime/bwa.h", new File(out, "bwa.h"), r, say, dir);
+      copyResource("/runtime/bwa.c", new File(out, "bwa.c"), r, say, dir);
+      copyResource("/runtime/storybin.h", new File(out, "storybin.h"), r, say, dir);
+      copyResource("/runtime/storybin.c", new File(out, "storybin.c"), r, say, dir);
     } catch (Exception ex) {
       r.errors++;
       say.accept("ERROR: emitting: " + ex.getMessage());
+    }
+
+    // ---- compile stories to .storybin into the asset output dir ----
+    if (!stories.isEmpty()) {
+      String adir = settings == null || settings.assetsDir == null || settings.assetsDir.isBlank()
+          ? "assets" : settings.assetsDir.strip();
+      File storiesOut = new File(new File(root, adir), "stories");
+      Map<String, Integer> effCodes = new LinkedHashMap<>();
+      for (Effect e : schema.effects) {
+        effCodes.put(e.name, e.code);
+      }
+      if (!storiesOut.exists() && !storiesOut.mkdirs()) {
+        r.errors++;
+        say.accept("ERROR: could not create " + storiesOut.getAbsolutePath());
+      } else {
+        for (File f : stories) {
+          try {
+            Story s = Story.load(f);
+            byte[] bin = Storybin.compile(s, effCodes, f.getParentFile());
+            File outf = new File(storiesOut, s.id + ".storybin");
+            Files.write(outf.toPath(), bin);
+            r.written.add(outf);
+            say.accept("wrote " + adir + "/stories/" + s.id + ".storybin (" + bin.length + " bytes)");
+          } catch (Exception ex) {
+            r.errors++;
+            say.accept("ERROR: " + rel(root, f) + ": " + ex.getMessage());
+          }
+        }
+      }
     }
 
     say.accept(r.ok()
@@ -195,9 +222,9 @@ public final class Compiler {
     final List<Field> rootArrays = new ArrayList<>();          // type is a struct name
     final Map<String, Struct> structs = new LinkedHashMap<>(); // name -> struct
     final Set<String> instantiated = new LinkedHashSet<>();    // structs used as array elem
-    final List<String> effects;
+    final List<Effect> effects;
     final Root raw;
-    Schema(Root raw, List<String> effects) { this.raw = raw; this.effects = effects; }
+    Schema(Root raw, List<Effect> effects) { this.raw = raw; this.effects = effects; }
   }
 
   private static Scalar scalar(String t) {
@@ -285,10 +312,13 @@ public final class Compiler {
       }
     }
 
-    // effects unique
-    Set<String> seenEff = new LinkedHashSet<>();
-    for (String e : schema.effects) {
-      if (!seenEff.add(e)) { r.errors++; ok = false; say.accept("ERROR: duplicate effect '" + e + "'"); }
+    // effects: unique names AND unique dispatch codes
+    Set<String> seenEffName = new LinkedHashSet<>();
+    Map<Integer, String> seenEffCode = new LinkedHashMap<>();
+    for (Effect e : schema.effects) {
+      if (!seenEffName.add(e.name)) { r.errors++; ok = false; say.accept("ERROR: duplicate effect name '" + e.name + "'"); }
+      String dup = seenEffCode.put(e.code, e.name);
+      if (dup != null) { r.errors++; ok = false; say.accept("ERROR: duplicate effect code " + e.code + " (" + dup + " and " + e.name + ")"); }
     }
 
     return ok ? m : null;
@@ -319,9 +349,9 @@ public final class Compiler {
     sb.append('\n');
 
     // ---- effects ----
-    sb.append("/* ---- effects — each is void effect_<name>(SPINE* doc, int param) ---- */\n");
-    for (int i = 0; i < m.effects.size(); i++) {
-      sb.append("#define EFF_").append(up(m.effects.get(i))).append(' ').append(i).append('\n');
+    sb.append("/* ---- effects — stable dispatch codes; void effect_<name>(SPINE*, int) ---- */\n");
+    for (Effect e : m.effects) {
+      sb.append("#define EFF_").append(up(e.name)).append(' ').append(e.code).append('\n');
     }
     sb.append("#define EFF_COUNT ").append(m.effects.size()).append("\n\n");
 
@@ -354,14 +384,17 @@ public final class Compiler {
     sb.append("SPINE   *spine_load(const uint8_t *data, int size);    /* NULL on any error */\n");
     sb.append("uint8_t *spine_save(const SPINE *doc, int *out_size);  /* caller free()s result */\n\n");
 
-    // ---- effect prototypes ----
+    // ---- effect prototypes + dispatch ----
     if (!m.effects.isEmpty()) {
       sb.append("/* ---- effect hooks — you implement these somewhere in the game ---- */\n");
-      for (String e : m.effects) {
-        sb.append("void effect_").append(e).append("(SPINE *doc, int param);\n");
+      for (Effect e : m.effects) {
+        sb.append("void effect_").append(e.name).append("(SPINE *doc, int param);\n");
       }
       sb.append('\n');
     }
+    sb.append("/* dispatch an effect by its stable code (used by the story runtime); a\n");
+    sb.append(" * code with no matching effect is a no-op. Defined in spine_effects.gen.c. */\n");
+    sb.append("void story_effect(SPINE *doc, uint16_t code, int param);\n\n");
 
     sb.append("#endif /* SPINE_GEN_H */\n");
     return sb.toString();
@@ -519,6 +552,28 @@ public final class Compiler {
     sb.append("    spine_free(doc);\n");
     sb.append("    return NULL;\n");
     sb.append("}\n");
+    return sb.toString();
+  }
+
+  // ==========================================================================
+  // effect dispatch emission — spine_effects.gen.c
+  // ==========================================================================
+
+  /** the story-runtime effect dispatch: a stable code -> generated effect_ call. */
+  private static String emitEffects(Schema m) {
+    StringBuilder sb = new StringBuilder();
+    sb.append("/* Generated by rpg-spine codegen — DO NOT EDIT.\n")
+        .append(" * Dispatch a story effect by its stable code. The effect_<name> bodies are\n")
+        .append(" * yours to implement; this table is the only thing that needs the codes. */\n")
+        .append("#include \"spine.gen.h\"\n\n")
+        .append("void story_effect(SPINE *doc, uint16_t code, int param) {\n")
+        .append("    switch (code) {\n");
+    for (Effect e : m.effects) {
+      sb.append("    case ").append(e.code).append(": effect_").append(e.name)
+          .append("(doc, param); break;\n");
+    }
+    sb.append("    default: (void)doc; (void)param; break; /* unknown code: no-op */\n");
+    sb.append("    }\n}\n");
     return sb.toString();
   }
 

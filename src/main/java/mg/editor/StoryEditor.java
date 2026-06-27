@@ -734,7 +734,9 @@ public class StoryEditor implements Editor {
         try {
           Root r = new Root();
           Parser.merge_string(r, k.getName(), Files.readString(k.toPath()));
-          out.addAll(r.effects);
+          for (mg.tree.Effect ef : r.effects) {
+            out.add(ef.name);
+          }
         } catch (Exception ex) {
           Log.error("could not parse " + k.getName() + " for effects", ex);
         }

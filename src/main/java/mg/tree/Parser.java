@@ -105,9 +105,15 @@ public class Parser {
     }
     Token detectEffect = tokens.popIf((t) -> t.isIdentifier("effect"));
     if (detectEffect != null) {
+      DocumentPosition position = tokens.position();
+      Token code = tokens.pop(); // the stable dispatch code
+      if (code == null || !code.isNumberLiteralInteger()) {
+        throw new SpineLangException("expected a dispatch code after 'effect' (e.g. effect 1: name;)", tokens.position());
+      }
+      expect(":");
       Token name = id(); // the effect's name
       expect(";");
-      root.effects.add(name.text);
+      root.effects.add(new Effect(position, Integer.parseInt(code.text), name.text));
       return true;
     }
     return false;

@@ -18,6 +18,7 @@ public final class ProjectSettings {
   public int animCellW = 48;    // animation frame cell width, px
   public int animCellH = 48;    // animation frame cell height, px
   public String outputDir = "out"; // C codegen output folder, relative to the project root
+  public String assetsDir = "assets"; // compiled runtime assets (.storybin, …), relative to root
 
   private static ProjectSettings current = new ProjectSettings();
   private static File rootDir;
@@ -53,6 +54,7 @@ public final class ProjectSettings {
           p.animCellW = kv.getInt("anim_cell_w", p.animCellW);
           p.animCellH = kv.getInt("anim_cell_h", p.animCellH);
           p.outputDir = kv.get("output_dir", p.outputDir);
+          p.assetsDir = kv.get("assets_dir", p.assetsDir);
         }
       } catch (Exception ex) {
         Log.error("failed to read .project; using defaults", ex);
@@ -71,7 +73,8 @@ public final class ProjectSettings {
         + " icon_small=" + iconSmall
         + " anim_cell_w=" + animCellW
         + " anim_cell_h=" + animCellH
-        + " output_dir=" + KV.q(outputDir) + "\n";
+        + " output_dir=" + KV.q(outputDir)
+        + " assets_dir=" + KV.q(assetsDir) + "\n";
     Files.write(file(root).toPath(), body.getBytes(StandardCharsets.UTF_8));
   }
 }

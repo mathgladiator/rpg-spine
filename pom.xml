@@ -54,6 +54,10 @@
                 <includes>
                     <include>spine_runtime.h</include>
                     <include>spine_runtime.c</include>
+                    <include>bwa.h</include>
+                    <include>bwa.c</include>
+                    <include>storybin.h</include>
+                    <include>storybin.c</include>
                 </includes>
             </resource>
         </resources>
