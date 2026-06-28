@@ -60,14 +60,27 @@ public class BwImageEditor implements Editor {
   // resize threshold selector
   private final ChoiceBox<String> resizeMode = new ChoiceBox<>();
 
+  // The encoded-size readout (RLE + PNG) is expensive, so it is opt-in and only
+  // recomputed on a short debounce, never per painted pixel.
+  private final ToggleButton showSize = new ToggleButton("size");
+  private final javafx.animation.PauseTransition previewDebounce =
+      new javafx.animation.PauseTransition(Duration.millis(120));
+
   public BwImageEditor(File file, Label status) throws Exception {
     this.file = file;
     this.status = status;
     BufferedImage img = openOrCreate(file);
     this.canvas = new BwCanvas(img);
-    this.canvas.setOnChange(() -> { markDirty(); updatePreview(); });
+    // A paint stroke fires onChange once per pixel; mark dirty immediately but
+    // coalesce the (heavier) preview/status refresh so a drag stays smooth.
+    this.canvas.setOnChange(() -> { markDirty(); schedulePreview(); });
+    previewDebounce.setOnFinished(e -> refreshPreview());
     buildUi();
-    updatePreview();
+    refreshPreview();
+  }
+
+  private void schedulePreview() {
+    previewDebounce.playFromStart();
   }
 
   /** load an existing 1-bit PNG, or prompt for dimensions and start blank. */
@@ -152,8 +165,10 @@ public class BwImageEditor implements Editor {
     Button toCell = new Button("→ cell " + ps.animCellW + "×" + ps.animCellH);
     toCell.setOnAction(e -> canvas.setImage(Mono.scaleTo(canvas.image(), ps.animCellW, ps.animCellH)));
 
+    showSize.setOnAction(e -> refreshPreview()); // recompute the readout on demand
+
     ToolBar bar2 = new ToolBar(trimWhite, trimBlack, sep(), canvasSize, scaleSize, crop,
-        sep(), toIcon, toCell);
+        sep(), toIcon, toCell, sep(), showSize);
 
     ScrollPane scroller = new ScrollPane(centered(canvas));
     scroller.setPannable(true);
@@ -220,7 +235,7 @@ public class BwImageEditor implements Editor {
     frames = new Spinner<>(1, 64, 1);
     frames.setEditable(true);
     frames.setPrefWidth(70);
-    frames.valueProperty().addListener((o, a, b) -> { frameIndex = 0; updatePreview(); });
+    frames.valueProperty().addListener((o, a, b) -> { frameIndex = 0; refreshPreview(); });
 
     fps = new Spinner<>(1, 30, 6);
     fps.setPrefWidth(70);
@@ -300,10 +315,10 @@ public class BwImageEditor implements Editor {
   private void step(int delta) {
     stopPlayerToggleSafe();
     frameIndex = Math.floorMod(frameIndex + delta, frameCount());
-    updatePreview();
+    refreshPreview();
   }
 
-  private void updatePreview() {
+  private void refreshPreview() {
     BufferedImage img = canvas.image();
     int n = frameCount();
     int cellW = Math.max(1, img.getWidth() / n);
@@ -312,8 +327,9 @@ public class BwImageEditor implements Editor {
     }
     BufferedImage frame = Mono.region(img, frameIndex * cellW, 0, cellW, img.getHeight());
     preview.setImage(BwCanvas.toFxImage(frame));
-    status.setText(file.getName() + " — " + img.getWidth() + "×" + img.getHeight()
-        + " — frame " + (frameIndex + 1) + "/" + n + " — " + sizePreview(img));
+    String base = file.getName() + " — " + img.getWidth() + "×" + img.getHeight()
+        + " — frame " + (frameIndex + 1) + "/" + n;
+    status.setText(showSize.isSelected() ? base + " — " + sizePreview(img) : base);
   }
 
   /** encoded size in the bank's RLE/detail scheme vs the PNG, so they can be compared. */
@@ -336,7 +352,7 @@ public class BwImageEditor implements Editor {
     stopPlayer();
     player = new Timeline(new KeyFrame(Duration.seconds(1.0 / fps.getValue()), e -> {
       frameIndex = (frameIndex + 1) % frameCount();
-      updatePreview();
+      refreshPreview();
     }));
     player.setCycleCount(Animation.INDEFINITE);
     player.play();

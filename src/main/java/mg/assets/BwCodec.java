@@ -74,19 +74,17 @@ public final class BwCodec {
     int[] dp = new int[n + 1];
     int[] take = new int[n + 1];
     boolean[] detail = new boolean[n + 1];
+    // `run` is the maximal same-colour run starting at i, capped at 2048 (the most
+    // any code can consume). Computed incrementally from i+1 — O(n), not O(n^2).
+    int run = 0;
     for (int i = n - 1; i >= 0; i--) {
-      int c = px[i];
-      // length of the maximal same-colour run starting at i (capped to a 5-bit count)
-      int run = 1;
-      while (i + run < n && px[i + run] == c) {
-        run++;
-      }
+      run = (i + 1 < n && px[i] == px[i + 1]) ? Math.min(run + 1, 2048) : 1;
       int rleTake = Math.min(run, 32); // 5-bit count stored as take-1, so 1..32
       int best = 1 + dp[i + rleTake];
       int bestTake = rleTake;
       boolean bestDetail = false;
       // a long run (2 bytes) pays for itself once it beats two short runs
-      int longTake = Math.min(run, 2048); // 11-bit count stored as take-1, so 1..2048
+      int longTake = run; // already capped to 2048 (11-bit count stored as take-1)
       if (longTake > 32) {
         int cost = 2 + dp[i + longTake];
         if (cost < best) {
@@ -151,14 +149,11 @@ public final class BwCodec {
   public static int encodedSize(int[] px) {
     int n = px.length;
     int[] dp = new int[n + 1];
+    int run = 0; // maximal same-colour run starting at i, capped at 2048; O(n) overall
     for (int i = n - 1; i >= 0; i--) {
-      int c = px[i];
-      int run = 1;
-      while (i + run < n && px[i + run] == c) {
-        run++;
-      }
+      run = (i + 1 < n && px[i] == px[i + 1]) ? Math.min(run + 1, 2048) : 1;
       int best = 1 + dp[i + Math.min(run, 32)];
-      int longTake = Math.min(run, 2048);
+      int longTake = run;
       if (longTake > 32) {
         best = Math.min(best, 2 + dp[i + longTake]);
       }

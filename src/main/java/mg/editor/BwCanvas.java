@@ -2,7 +2,7 @@ package mg.editor;
 
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
-import javafx.scene.image.PixelWriter;
+import javafx.scene.image.PixelFormat;
 import javafx.scene.image.WritableImage;
 import javafx.scene.layout.Pane;
 import javafx.scene.paint.Color;
@@ -296,13 +296,25 @@ public class BwCanvas extends Pane {
   public static WritableImage toFxImage(BufferedImage bi) {
     int w = bi.getWidth();
     int h = bi.getHeight();
-    WritableImage out = new WritableImage(w, h);
-    PixelWriter pw = out.getPixelWriter();
+    // Build an ARGB buffer and blit it in one setPixels call — far cheaper than
+    // w*h individual setColor() calls (this runs on every setImage/undo/preview).
+    int[] argb = new int[w * h];
+    int i = 0;
     for (int y = 0; y < h; y++) {
       for (int x = 0; x < w; x++) {
-        pw.setColor(x, y, colorFor(Mono.state(bi, x, y)));
+        argb[i++] = argbFor(Mono.state(bi, x, y));
       }
     }
+    WritableImage out = new WritableImage(w, h);
+    out.getPixelWriter().setPixels(0, 0, w, h, PixelFormat.getIntArgbInstance(), argb, 0, w);
     return out;
+  }
+
+  private static int argbFor(int state) {
+    return switch (state) {
+      case Mono.BLACK -> 0xFF000000;
+      case Mono.TRANSPARENT -> 0xFF32CD32; // LIMEGREEN, matches TRANSPARENT_VIEW
+      default -> 0xFFFFFFFF;
+    };
   }
 }
